@@ -177,7 +177,15 @@ async function openProject(id){
     <p class="lede"><span class="status ${esc(p.status)}">${STATUS[p.status]}</span> Rôle sur ce projet : <span class="role ${esc(role)}">${ROLE[role] || 'Administrateur'}</span></p>
     ${readOnly ? '<div class="banner">Lecture seule — ce compte ne peut ni saisir ni consulter les données financières.</div>' : ''}
     <div class="card"><div class="kv" id="kv-${p.id}"><span>Rapports : <b>…</b></span></div>
-      <p style="margin:0;color:var(--muted);font-size:.9rem">Tableau de bord, saisie, contraintes et attachement seront branchés ici sur la base centrale (prochaine étape : import des rapports Dispersion 1B et couche d'adaptation V1.5).</p></div>
+      <p style="margin:0 0 12px;color:var(--muted);font-size:.9rem">Tableau de bord, saisie, contraintes et attachement seront branchés ici sur la base centrale (prochaine étape : couche d'adaptation V1.5).</p>
+      <div class="actions"><button onclick="reconcile('${p.id}')">Cumuls réseau depuis la base</button></div>
+      <ul id="recon" style="list-style:none;padding:0;margin:10px 0 0;font-size:.9rem;color:var(--muted)"></ul></div>
+    ${['direction','admin'].includes(role) ? `
+    <section class="test card" style="margin-top:18px"><h2>Importer un export V1 / V1.5 (JSON)</h2>
+      <p style="margin:0 0 10px;color:var(--muted);font-size:.9rem">Fichier « Export complet » de l'application terrain. Les rapports sont écrits dans la base centrale (mise à jour si la date existe déjà), les paramètres deviennent la configuration du projet, les aléas rejoignent l'état du projet. Le fichier ne quitte pas ton navigateur.</p>
+      <div class="actions"><input type="file" id="impfile" accept="application/json" style="max-width:360px"><button class="primary" onclick="importV1('${p.id}')">Importer</button></div>
+      <ul id="implog" style="margin-top:12px"></ul>
+    </section>` : ''}
     <section class="test card"><h2>Contrôle des droits</h2>
       <p style="margin:0 0 10px;color:var(--muted);font-size:.9rem">Vérifie ce que la base autorise réellement pour ce compte — pas ce que l'écran affiche.</p>
       <ul id="tests"><li>Lecture des rapports du projet</li><li>Lecture des attachements (finance)</li><li>Écriture d'un rapport</li></ul>
@@ -208,6 +216,64 @@ async function runTests(id, role){
     set(2, !!r3.error, r3.error ? 'Écriture refusée par la base — conforme au rôle' : 'ANOMALIE : l\u2019écriture a été acceptée');
     if(!r3.error) await sb.from('daily_reports').delete().eq('project_id', id).eq('report_date', '1900-01-01');
   }
+}
+
+const isDate = k => /^\d{4}-\d{2}-\d{2}$/.test(k);
+function log(el, txt, cls=''){ const li = document.createElement('li'); li.className = cls; li.textContent = txt; el.appendChild(li); }
+
+async function importV1(id){
+  const f = document.getElementById('impfile').files[0], out = document.getElementById('implog'); out.innerHTML = '';
+  if(!f){ log(out, 'Choisis d\u2019abord le fichier JSON.', 'ko'); return; }
+  let j; try { j = JSON.parse(await f.text()); } catch(e){ log(out, 'Fichier illisible : ' + e.message, 'ko'); return; }
+  const rap = j.rapports_journaliers || {};
+  const dates = Object.keys(rap).filter(isDate).sort(), specials = Object.keys(rap).filter(k => !isDate(k));
+  if(!dates.length){ log(out, 'Aucun rapport journalier trouvé dans ce fichier.', 'ko'); return; }
+  log(out, `Fichier lu : ${dates.length} rapports (${dates[0]} → ${dates.at(-1)}), ${specials.length} clé(s) spéciale(s), aléas : ${(j.aleas||[]).length}.`, 'ok');
+
+  // 1. Configuration projet (version suivante, motif si ≥ 2)
+  const { data:cfgs } = await sb.from('project_config').select('version').eq('project_id', id).order('version', { ascending:false }).limit(1);
+  const version = (cfgs?.[0]?.version || 0) + 1;
+  const config = { source:'export_v1', meta:j.meta || null, parametres:j.parametres || null, etat_initial:j.etat_initial || null, definitions:j.definitions_indicateurs || null };
+  const { error:ec } = await sb.from('project_config').insert({ project_id:id, version, config, reason: version > 1 ? `Import export V1 du ${f.name}` : null, created_by:me.id });
+  log(out, ec ? 'Configuration : ' + ec.message : `Configuration importée (version ${version}).`, ec ? 'ko' : 'ok');
+
+  // 2. Rapports par lots de 25, mise à jour si la date existe
+  let done = 0, failed = 0;
+  for(let i = 0; i < dates.length; i += 25){
+    const rows = dates.slice(i, i+25).map(d => ({ project_id:id, report_date:d, payload:rap[d], author_id:me.id }));
+    const { error } = await sb.from('daily_reports').upsert(rows, { onConflict:'project_id,report_date' });
+    if(error){ failed += rows.length; log(out, `Lot ${i/25+1} refusé : ${error.message}`, 'ko'); } else done += rows.length;
+  }
+  log(out, `Rapports écrits : ${done} / ${dates.length}${failed ? ` — ${failed} en échec` : ''}.`, failed ? 'ko' : 'ok');
+
+  // 3. Aléas et clés spéciales → état du projet
+  const states = [];
+  if(Array.isArray(j.aleas)) states.push({ project_id:id, key:'aleas', value:j.aleas, updated_by:me.id });
+  specials.forEach(k => states.push({ project_id:id, key:k.replace(/^__|__$/g,''), value:rap[k], updated_by:me.id }));
+  if(states.length){ const { error:es } = await sb.from('project_state').upsert(states, { onConflict:'project_id,key' }); log(out, es ? 'État projet : ' + es.message : `État projet : ${states.map(s=>s.key).join(', ')}.`, es ? 'ko' : 'ok'); }
+
+  await sb.from('audit_events').insert({ project_id:id, actor_id:me.id, action:'import.v1', target:f.name, after:{ reports:done, version } });
+  summary(id); await reconcile(id);
+}
+
+async function reconcile(id){
+  const out = document.getElementById('recon'); out.innerHTML = '<li>Calcul en cours…</li>';
+  const { data, error } = await sb.from('daily_reports').select('report_date,payload').eq('project_id', id).order('report_date');
+  if(error){ out.innerHTML = `<li>${esc(error.message)}</li>`; return; }
+  const t = { s:0, f:0, r:0, ess:0 };
+  for(const row of data || []){
+    for(const loc of Object.values(row.payload?.loc || {})){
+      for(const zone of Object.values(loc?.zones || {})){
+        for(const dn of Object.values(zone || {})){
+          if(dn && typeof dn === 'object'){ t.s += +dn.s || 0; t.f += +dn.f || 0; t.r += +dn.r || 0; t.ess += +dn.ess || 0; }
+        }
+      }
+    }
+  }
+  const fmt = v => v.toLocaleString('fr-FR', { maximumFractionDigits:1 });
+  out.innerHTML = `<li>${data.length} rapports · ${data[0]?.report_date || '—'} → ${data.at(-1)?.report_date || '—'}</li>
+    <li>Soudure <b>${fmt(t.s)}</b> ml · Fouille <b>${fmt(t.f)}</b> ml · Remblai <b>${fmt(t.r)}</b> ml · Essais <b>${fmt(t.ess)}</b> ml</li>
+    <li style="color:var(--faint)">Sommes brutes des saisies, sans plafonnement — à comparer aux cartes de l'application terrain.</li>`;
 }
 
 async function createProject(){
