@@ -258,6 +258,22 @@ function coefLot(lot){
   let s=0;Object.keys(ACTIV).forEach(k=>{if(k==='gc'&&lot.regards===0)return;s+=ACTIV[k].coef;});
   return s;
 }
+// ── Indice de continuité (03/09/2026) ──
+// Méthode des attachements N°01 à N°08 (pondération ACTIV, moyenne des lots au prorata du linéaire).
+// Conservé à côté de l'indice V2 pour que l'historique reste comparable aux situations signées.
+function indiceContinuiteLot(lot,cuLot){
+  if(!cuLot||!lot.tot)return 0;
+  const det={imp:Math.min(1,+cuLot.imp||0)*100,bar:0,soud:0,fou:0,rem:0,ess:0,gc:0,rec:0};
+  let barTot=0,essTot=0;
+  lot.zones.forEach(zn=>{const zc=cuLot.zones?.[zn.zid];if(!zc)return;Object.entries(zn.dn).forEach(([dn,prev])=>{const dc=zc.dn?.[dn]||{};barTot+=Math.min(+dc.bar||0,+prev||0);essTot+=Math.min(+dc.ess||0,+prev||0);});});
+  det.bar=barTot/lot.tot*100;det.ess=essTot/lot.tot*100;
+  det.soud=Math.min(+cuLot.s||0,lot.tot)/lot.tot*100;det.fou=Math.min(+cuLot.f||0,lot.tot)/lot.tot*100;det.rem=Math.min(+cuLot.r||0,lot.tot)/lot.tot*100;
+  if(lot.regards>0)det.gc=Math.min(1,(+(cuLot.gcProgress??cuLot.gc)||0)/lot.regards)*100;
+  det.rec=(cuLot.recolementStatus==='valide'||+cuLot.rec>=1)?100:0;
+  const cf=coefLot(lot);let total=0;Object.keys(ACTIV).forEach(k=>{if(k==='gc'&&lot.regards===0)return;total+=ACTIV[k].coef*det[k];});
+  return cf?total/cf:0;
+}
+function indiceContinuite(cu){const tP=LOC.reduce((s,l)=>s+l.tot,0);return tP?LOC.reduce((s,l)=>s+indiceContinuiteLot(l,cu[l.id])*l.tot/tP,0):0;}
 
 // ── PLANNING OPÉRATIONNEL V05 (toutes activités, dates réelles planning) ──
 // Structure: {lot, zone (optionnel), act, ml|nb, d0, d1}
@@ -820,8 +836,10 @@ function dernierAttachementValide(){
   if(typeof ATTACH_XLS==='undefined'||!ATTACH_XLS?.periods)return null;
   return Object.values(ATTACH_XLS.periods).map(validatedAttachmentSnapshot).filter(Boolean).sort((a,b)=>a.key.localeCompare(b.key)).at(-1)||null;
 }
+function financeSummaryAsSynthese(){const s=db?.__finance_summary__;if(!Number.isFinite(+s?.taux))return null;return{period:{key:s.period?.key||'',number:s.period?.number||null,label:s.period?.label||''},taux:+s.taux,marche:null,cumul:null,shared:true};}
 function syntheseFinanciereValidee(){
   const period=dernierAttachementValide();if(!period)return null;
+  if(period.imported&&period.amounts){const marche=+period.amounts.marketHt||0,cumul=+period.amounts.cumulativeHt||0;return{period,marche,cumul,taux:marche>0?cumul/marche*100:null,imported:true};}
   if(ATTACH_XLS?.mode==='generic'||PROJECT_CONFIG.finance?.dqe?.lines?.length){
     const lines=(PROJECT_CONFIG.finance?.dqe?.lines||[]).filter(l=>!dqeIsHeadingLine(l)),discount=Math.max(0,Math.min(100,+PROJECT_CONFIG.finance?.discount||0))/100,retention=Math.max(0,Math.min(100,+PROJECT_CONFIG.finance?.retention||0))/100;
     const grossMarket=lines.reduce((s,l)=>s+(+l.marketQty||0)*(+l.unitPrice||0),0),grossCumulative=lines.reduce((s,l)=>s+(genericAttachmentLineValues(period,l).cumulativeAmount||0),0),marche=grossMarket*(1-discount)*(1-retention),cumul=grossCumulative*(1-discount)*(1-retention);
@@ -1330,7 +1348,7 @@ function renderParamRevisions(cfg){return`<div class="cd"><div class="ct">Histor
 function pgParametrageProjet(){
   const cfg=activeProjectParamConfig(),editing=!!PARAM_DRAFT;if(editing&&cfg.planning?.mode==='manual'&&!(activePlanningVersion(cfg)?.rows||[]).length)syncPlanningMonths(true);const tabs=[['identity','Identité'],['network','Structure réseau'],['planning','Planning contractuel'],['works','Ouvrages & jalons'],['rules','Méthode de calcul'],['revisions','Révisions']],errors=editing?projectConfigErrors(cfg).filter(e=>!e.startsWith('Le motif')):[];
   let body=PARAM_SECTION==='network'?renderParamNetwork(cfg):PARAM_SECTION==='planning'?renderParamPlanning(cfg):PARAM_SECTION==='works'?renderParamWorks(cfg):PARAM_SECTION==='rules'?renderParamRules(cfg):PARAM_SECTION==='revisions'?renderParamRevisions(cfg):renderParamIdentity(cfg);
-  return`<div class="mn param-page"><div class="param-page-head"><div><div class="st" style="margin:0">Paramétrage du projet</div><div class="attach-subtitle">Référentiel technique, contractuel et méthodologique</div></div><div class="param-actions"><span class="kb bbl">Mode démonstration · ${CURRENT_USER_CONTEXT.label}</span>${editing?'<button class="bt" onclick="cancelProjectRevision()">Annuler</button><button class="bp" onclick="validateProjectRevision()">✓ Valider la révision</button>':'<button class="bp" onclick="beginProjectRevision()">✎ Créer une révision</button>'}</div></div>
+  return`<div class="mn param-page"><div class="param-page-head"><div><div class="st" style="margin:0">Paramétrage du projet</div><div class="attach-subtitle">Référentiel technique, contractuel et méthodologique</div></div><div class="param-actions"><span class="kb bbl">Connecté en ${escHtml(CURRENT_USER_CONTEXT.label)}</span>${editing?'<button class="bt" onclick="cancelProjectRevision()">Annuler</button><button class="bp" onclick="validateProjectRevision()">✓ Valider la révision</button>':'<button class="bp" onclick="beginProjectRevision()">✎ Créer une révision</button>'}</div></div>
     <div class="param-status ${editing?'draft':'locked'}"><div><b>${editing?'Révision en préparation':'Paramétrage validé et verrouillé'}</b><span>${editing?'Les changements restent locaux tant qu’ils ne sont pas validés.':'Le projet contient '+dbDates().length+' rapports : toute modification doit être datée et justifiée.'}</span></div>${editing?`<label><span>Motif obligatoire</span><input class="fi" value="${escHtml(cfg._revision?.reason||'')}" placeholder="Ex. révision du linéaire contractuel" oninput="projectDraftReason(this.value)"></label>`:`<small>Dernière validation : ${cfg.validatedAt?fD(cfg.validatedAt.slice(0,10)):'Non renseignée'}</small>`}</div>
     ${errors.length?`<div class="param-errors"><b>${errors.length} incohérence(s) à corriger</b><span>${errors.join(' · ')}</span></div>`:''}
     <div class="param-tabs">${tabs.map(([v,l])=>`<button class="${PARAM_SECTION===v?'active':''}" onclick="setParamSection('${v}')">${l}</button>`).join('')}</div>${body}</div>`;
@@ -2534,7 +2552,7 @@ function pgDG(){
   const nRapports=dbDates().length;
   const dernierRpt=dbDates().sort().pop();
   const restePoser=Math.max(0,tP-synth.totals.rem);
-  const finance=syntheseFinanciereValidee(),avFinancier=finance?.taux??null,mobilisation=mobilisationAttacheeSummary();
+  const finance=syntheseFinanciereValidee()||financeSummaryAsSynthese(),avFinancier=finance?.taux??null,mobilisation=mobilisationAttacheeSummary();
   const activityRow=(label,pct,value,color,note='')=>`<div class="activity-row">
     <div class="activity-row-head"><span>${label}</span><strong>${pct===null?'Non renseigné':pct.toFixed(1)+'%'}</strong></div>
     <div class="activity-track ${pct===null?'activity-track--pending':''}"><span style="width:${pct===null?0:Math.min(100,pct)}%;background:${color}"></span></div>
@@ -2561,12 +2579,13 @@ function pgDG(){
       <div class="decision-number">${avPhysique}<span>%</span></div>
       <div class="decision-progress"><span style="width:${Math.min(100,synth.index)}%"></span></div>
       <div class="decision-foot">${synth.applicableKeys.length} composantes applicables · non financier</div>
+      <div class="decision-foot" title="Méthode des attachements N°01 à N°08 : implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½">Indice de continuité (méthode des attachements) : <b>${indiceContinuite(cu).toFixed(1)} %</b></div>
     </div>
     <div class="decision-card decision-card--financial">
       <div class="decision-kicker">Avancement financier</div>
       <div class="decision-number ${avFinancier===null?'decision-number--pending':''}">${avFinancier===null?'Non calculé':avFinancier.toFixed(1)+' %'}</div>
       <div class="decision-progress ${avFinancier===null?'decision-progress--pending':''}"><span style="width:${avFinancier===null?0:Math.min(100,avFinancier)}%"></span></div>
-      <div class="decision-highlight">${finance?`Situation N°${String(finance.period.number).padStart(2,'0')} validée · ${finance.period.label}<br><b>${attachMoney(finance.cumul)}</b> / ${attachMoney(finance.marche)}`:'Aucun attachement validé disponible'}</div>
+      <div class="decision-highlight">${finance?`Situation ${finance.period.number?'N°'+String(finance.period.number).padStart(2,'0')+' ':''}validée · ${escHtml(finance.period.label||'')}${finance.marche!=null?`<br><b>${attachMoney(finance.cumul)}</b> / ${attachMoney(finance.marche)}`:'<br><small>Montants réservés à la direction du projet</small>'}`:'Aucun attachement validé disponible'}</div>
     </div>
     <div class="decision-card decision-card--closed">
       <div class="decision-kicker">Conduite posée</div>
@@ -2768,7 +2787,7 @@ function pgDG(){
       <div class="ct" style="margin:0"><span class="dt" style="background:#36b37e"></span> Trajectoire d'avancement physique</div>
       <button id="toggle-dg-operational" aria-pressed="${DG_SHOW_OPERATIONAL}" class="no-print" onclick="toggleDGOperational()" style="font-size:10px;padding:5px 10px;border:1px solid #dce1e9;border-radius:6px;background:#f8fafc;color:#5a6778;cursor:pointer">${DG_SHOW_OPERATIONAL?'Masquer l’indice interne':'Afficher l’indice interne'}</button>
     </div>
-    <div style="font-size:10px;color:#8a95a5;margin:4px 0 10px 15px">Comparaison de la conduite posée retenue avec le planning contractuel initial. L'indice opérationnel reste une lecture interne optionnelle.</div>
+    <div style="font-size:10px;color:#8a95a5;margin:4px 0 10px 15px">Comparaison de la conduite posée retenue avec le planning contractuel initial. La courbe grise pointillée est l'<b>indice de continuité</b>, calculé avec la méthode des attachements N°01 à N°08 (implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½) : c'est la lecture comparable aux situations signées. L'indice physique consolidé V2 (pondération à huit composantes adoptée le 31/08/2026) est recalculé sur tout l'historique et ne doit pas être comparé aux attachements.<span id="dg-index-gap"></span></div>
     <div class="ch" style="height:300px"><canvas id="chDGcurve"></canvas></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:10px">
       <div style="padding:9px 11px;background:#ecfdf5;border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Conduite posée retenue</div><b style="color:#15803d">${physicalAtLatest.toFixed(1)}% · ${fmt(synth.totals.rem)} ml</b></div>
@@ -2999,13 +3018,19 @@ function mkDGCharts(){
       const cuM=cumul(finMois);
       return +avancementPhysique(cuM).toFixed(1);
     });
+    const reelContinuityData=[];
     const reelOperationalData=xMonths.map(m=>{
-      if(!premierMoisSaisi||m<premierMoisSaisi)return 0;
-      if(m>dernierMoisSaisi)return null;
+      if(!premierMoisSaisi||m<premierMoisSaisi){reelContinuityData.push(0);return 0;}
+      if(m>dernierMoisSaisi){reelContinuityData.push(null);return null;}
       const[yy,mm]=m.split('-').map(Number);
       const finMois=new Date(yy,mm,0).toISOString().slice(0,10);
-      return +avancementGlobal(cumul(finMois)).toFixed(1);
+      const cuM=cumul(finMois);
+      reelContinuityData.push(+indiceContinuite(cuM).toFixed(1));
+      return +avancementGlobal(cuM).toFixed(1);
     });
+    // Note méthodologique : écart maximal entre l'indice V2 et l'indice de continuité
+    {let gapMax=0,gapMonth='';xMonths.forEach((m,i)=>{const a=reelOperationalData[i],b=reelContinuityData[i];if(a===null||b===null||m<premierMoisSaisi)return;if(Math.abs(a-b)>Math.abs(gapMax)){gapMax=a-b;gapMonth=m;}});
+      const gapEl=document.getElementById('dg-index-gap');if(gapEl)gapEl.textContent=gapMonth?` Écart maximal entre les deux indices : ${gapMax>0?'+':''}${gapMax.toFixed(1)} points (${moisNm(gapMonth)}).`:'';}
     // Courbe objectif physique : cycle de pose planifié
     const objData=buildPhysicalPlannedCurve(xMonths);
     const lastRealIndex=reelPhysicalData.reduce((last,v,i)=>v===null?last:i,-1);
@@ -3037,6 +3062,10 @@ function mkDGCharts(){
           borderColor:'#2c7be5',backgroundColor:'transparent',fill:false,spanGaps:false,
           pointBackgroundColor:'#2c7be5',pointRadius:4,pointHoverRadius:6,
           borderWidth:2,tension:0,hidden:!DG_SHOW_OPERATIONAL},
+        {label:'Indice de continuité — méthode des attachements',data:reelContinuityData,
+          borderColor:'#5a6778',backgroundColor:'transparent',fill:false,spanGaps:false,
+          pointBackgroundColor:'#5a6778',pointRadius:3,pointHoverRadius:6,
+          borderWidth:2,borderDash:[2,4],tension:0},
         {label:activePlanningVersion()?.label||'Planning contractuel initial',data:objData,
           borderColor:'#f59e0b',backgroundColor:'transparent',fill:false,
           pointBackgroundColor:'#f59e0b',pointRadius:3,pointHoverRadius:7,
@@ -3048,7 +3077,7 @@ function mkDGCharts(){
         tooltip:{callbacks:{
           label:c=>{
             const value=+c.parsed.y||0;
-            const showLength=c.dataset.label!=='Indice opérationnel interne';
+            const showLength=!/^Indice/.test(c.dataset.label);
             return `${c.dataset.label}: ${value.toFixed(1)}%${showLength?' · '+fmt(value/100*tP)+' ml':''}`;
           },
           afterBody:items=>{
@@ -3281,7 +3310,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.0 — Base centrale Supabase (03/09/2026)',
+      version_app:'2.1 — Base centrale Supabase · indice de continuité · attachement validé importé (03/09/2026)',
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -3462,19 +3491,6 @@ function renderAttachControls(ref,states){
   ];
   return`<div class="attach-control-kpis"><div><span>Lots à examiner</span><b>${attentionIds.size}</b></div><div><span>Lots avec ajustement</span><b>${mismatches.length}</b></div><div><span>Lots en dépassement</span><b>${overruns.length}</b></div><div><span>${ref.status==='draft'?'Valorisation DQE':'Continuité financière'}</span><b class="${ref.status==='draft'&&(negativeDqe.length||pipeMismatches.length)?'':'ok-text'}">${ref.status==='draft'?(negativeDqe.length||pipeMismatches.length?'À corriger':'Conforme'):'Conforme'}</b></div></div><div class="cd attach-table-card"><div class="attach-card-title"><div><b>Journal des contrôles</b><span>Ces points doivent être justifiés ou arbitrés avant de figer une nouvelle révision.</span></div></div><table class="tb attach-table"><thead><tr><th>Contrôle</th><th>Résultat</th><th>Lecture</th><th>Statut</th></tr></thead><tbody>${controls.map(c=>`<tr><td style="font-weight:600">${c.label}</td><td>${c.result}</td><td class="attach-note">${c.detail}</td><td><span class="attach-status ${c.status}">${c.status==='ok'?'Conforme':c.status==='alert'?'Bloquant':'À arbitrer'}</span></td></tr>`).join('')}</tbody></table></div>`;
 }
-function pgAttachementLegacy(){
-  const ref=ATTACH_MODE==='draft'?draftAttachmentReference():ATTACHMENT_REFERENCE,states=ref.lots.map(r=>attachLotState(r,ref));
-  const attention=states.filter(s=>Math.abs(s.adjustment)>.05||s.cumulative>s.market+.05).length;
-  let h=`<div class="mn"><div class="attach-page-head"><div><div class="st" style="margin-bottom:5px">Projet d’attachement</div><div class="attach-subtitle">Préparation interne avant transmission au service financier</div></div><div class="attach-head-actions"><span class="attach-private">🔒 Confidentiel · Chef de projet</span>${ATTACH_MODE==='draft'?'<button class="bt" onclick="showAttachmentReference()">Voir la référence validée</button>':'<button class="bp" onclick="startAttachmentDraft()">✎ Créer un brouillon</button>'}</div></div>
-    <div class="cd attach-context"><div><label class="fl">Situation affichée</label><select class="fi" onchange="this.value==='draft'?startAttachmentDraft():showAttachmentReference()"><option value="reference" ${ATTACH_MODE==='reference'?'selected':''}>N°08 — ${ATTACHMENT_REFERENCE.label} · référence validée</option><option value="draft" ${ATTACH_MODE==='draft'?'selected':''}>Brouillon local issu de N°08</option></select></div><div><span>Révision</span><b>${ref.revision}</b></div><div><span>Statut</span><b class="${ref.status==='validated'?'attach-valid':'attach-draft-status'}">${ref.status==='validated'?'✓ Validé':'✎ En préparation'}</b></div><div><span>Période de travail</span><b>01/08/2026 → 31/08/2026</b></div><div><span>Précédent figé</span><b>${ref.status==='validated'?'N°07 — juillet 2026':'N°08 — août 2026'}</b></div></div>
-    <div class="attach-view-tabs no-print">${ATTACH_MODE==='draft'?`<button class="${ATTACH_VIEW==='draft'?'active':''}" onclick="setAttachView('draft')">Arbitrage</button><button class="${ATTACH_VIEW==='valuation'?'active':''}" onclick="setAttachView('valuation')">Valorisation DQE</button>`:''}<button class="${ATTACH_VIEW==='summary'?'active':''}" onclick="setAttachView('summary')">Synthèse</button>${ATTACH_MODE==='reference'?`<button class="${ATTACH_VIEW==='detail'?'active':''}" onclick="setAttachView('detail')">Détail par lot</button>`:''}<button class="${ATTACH_VIEW==='controls'?'active':''}" onclick="setAttachView('controls')">Contrôles <span>${attention}</span></button></div>`;
-  if(ATTACH_VIEW==='draft'&&ATTACH_MODE==='draft')h+=renderAttachDraft(ref,states);
-  else if(ATTACH_VIEW==='valuation'&&ATTACH_MODE==='draft')h+=renderAttachValuation(ref,states);
-  else if(ATTACH_VIEW==='summary')h+=renderAttachSummary(ref,states);
-  else if(ATTACH_VIEW==='detail'&&ATTACH_MODE==='reference')h+=renderAttachDetail(ref,states);
-  else h+=renderAttachControls(ref,states);
-  return h+`<div class="attach-disclaimer">${ref.status==='validated'?'Cette vue rapproche les données terrain et l’attachement validé.':'Ce brouillon est enregistré uniquement dans ce navigateur et ne modifie ni les rapports terrain, ni le fichier Excel validé.'} La vérification contractuelle et l’approbation humaine restent obligatoires.</div></div>`;
-}
 
 // ── ATTACHEMENT CONTRACTUEL À DEUX NIVEAUX ──
 // v2 : les ajustements portent sur le cumul validé. La quantité du mois est toujours H - F.
@@ -3489,15 +3505,16 @@ async function loadAttachLedgerRemote(){
   const {data,error}=await sb.from('attachment_periods').select('period,number,status,ledger,updated_at').eq('project_id',ACTIVE_PROJECT_ID).order('period');
   if(error){toast('Attachements illisibles : '+error.message);return;}
   const ledger={mode:'generic',selected:'',periods:{}};
-  (data||[]).forEach(row=>{const cur=ledger.periods[row.period];if(!cur||row.status==='validated'||(cur.status!=='validated'&&row.updated_at>(cur._updated||'')))ledger.periods[row.period]={...(row.ledger||{}),key:row.period,number:row.number,status:row.status,_updated:row.updated_at};});
+  (data||[]).forEach(row=>{const cur=ledger.periods[row.period];if(!cur||row.status==='validated'||(cur.status!=='validated'&&row.updated_at>(cur._updated||'')))ledger.periods[row.period]={...(row.ledger||{}),key:row.period,number:row.number,status:row.status,_updated:row.updated_at,_persisted:true};});
   const keys=Object.keys(ledger.periods).sort();ledger.selected=keys.at(-1)||'';ATTACH_XLS=ledger;
 }
 async function saveAttachLedger(){
   if(!isConfigured()||!canAccessFinance()){toast('Attachements réservés à la direction du projet.');return;}
-  const rows=Object.values(ATTACH_XLS.periods||{}).map(p=>({project_id:ACTIVE_PROJECT_ID,period:p.key,number:p.number||null,status:p.status==='validated'?'validated':'draft',ledger:{...p,_updated:undefined},validated_by:p.status==='validated'?SESSION.user.id:null,validated_at:p.status==='validated'?new Date().toISOString():null}));
-  if(!rows.length)return;
+  const pending=Object.values(ATTACH_XLS.periods||{}).filter(p=>!(p._persisted&&p.status==='validated'));
+  const rows=pending.map(p=>({project_id:ACTIVE_PROJECT_ID,period:p.key,number:p.number||null,status:p.status==='validated'?'validated':'draft',ledger:{...p,_updated:undefined,_persisted:undefined},validated_by:p.status==='validated'?SESSION.user.id:null,validated_at:p.status==='validated'?new Date().toISOString():null}));
+  if(!rows.length){await publishFinanceSummary();return;}
   const {error}=await sb.from('attachment_periods').upsert(rows,{onConflict:'project_id,period,status'});
-  if(error)toast('Attachement non enregistré : '+error.message);else await publishFinanceSummary();
+  if(error)toast('Attachement non enregistré : '+error.message);else{pending.forEach(p=>{p._persisted=true;});await publishFinanceSummary();}
 }
 function activeAttachPeriod(){return ATTACH_XLS.periods[ATTACH_XLS.selected]||ATTACH_XLS.periods['2026-08']||null;}
 function attachMonthLabel(key){const [y,m]=key.split('-').map(Number);return new Date(Date.UTC(y,m-1,1)).toLocaleDateString('fr-FR',{month:'long',year:'numeric',timeZone:'UTC'}).replace(/^./,c=>c.toUpperCase());}
@@ -3752,9 +3769,94 @@ function renderGenericAttachment(period){
   const net=x=>x*(1-discount)*(1-retention);return`<div class="xls-lot-toolbar no-print"><div><span class="xls-locked">DQE v${PROJECT_CONFIG.finance?.dqe?.version||1} verrouillé · ${escHtml(PROJECT_CONFIG.finance?.dqe?.fileName||'référentiel importé')}</span></div><div>${editable?'<button class="bp" onclick="ATTACH_XLS_EDIT=false;draw()">✓ Enregistrer les ajustements</button>':'<button class="bp" onclick="beginContractAdjustment()">✎ Ajustement pour validation</button>'}</div></div><div class="xls-scroll"><table class="xls-sheet xls-detail generic-attachment"><thead><tr><th>N°</th><th>DÉSIGNATION</th><th>UNITÉ</th><th>QTÉ MARCHÉ</th><th>PU</th><th>MONTANT MARCHÉ</th><th>PRÉCÉDENT</th><th class="xls-month">MOIS<br><small>(calculé)</small></th><th>CUMUL${editable?'<br><small>(ajustable)</small>':''}</th><th class="xls-month">MONTANT MOIS</th><th>MONTANT CUMULÉ</th><th>%</th></tr></thead><tbody>${rows}<tr class="xls-total"><td colspan="5">TOTAL HT BRUT</td><td class="nr">${xlsFmt(tot.market,4)}</td><td class="nr">${xlsFmt(tot.previous,8)}</td><td class="nr xls-month">${xlsFmt(tot.month,9)}</td><td></td><td></td><td class="nr">${xlsFmt(tot.cumulative,10)}</td><td>${tot.market?xlsFmt(tot.cumulative/tot.market,11):'0%'}</td></tr>${discount?`<tr class="xls-total"><td colspan="10">TOTAL APRÈS REMISE ${Math.round(discount*100)} %</td><td class="nr">${xlsFmt(tot.cumulative*(1-discount),10)}</td><td></td></tr>`:''}${retention?`<tr class="xls-grand-total"><td colspan="10">TOTAL FACTURÉ APRÈS RETENUE ${Math.round(retention*100)} %</td><td class="nr">${xlsFmt(net(tot.cumulative),10)}</td><td>${tot.market?xlsFmt(net(tot.cumulative)/net(tot.market),11):'0%'}</td></tr>`:''}</tbody></table></div><div class="xls-formula-note"><b>Règle :</b> seul le cumul est ajustable. Le mois, les montants et le taux sont calculés. Ce référentiel générique ne crée aucun lien métier automatique entre lignes : ils devront être définis et validés projet par projet.</div>`;
 }
 window.stageGenericQty=stageGenericQty;
+// ── Attachement validé importé (mode b, 03/09/2026) ──
+// Le fichier Excel validé (souvent celui du client) fait foi. L'application n'en retient que
+// deux valeurs, désignées par la direction : le montant du marché HT et le cumul attaché HT
+// sur la même base (règle du N°08). Elle publie le taux ; les montants restent à la direction.
+let ATTACH_IMPORT=null;
+function colLetter(i){let s='';i++;while(i>0){const m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26);}return s;}
+async function loadValidatedAttachmentFile(input){
+  const file=input?.files?.[0];if(!file)return;
+  if(!window.XLSX){alert('Le module de lecture Excel est indisponible. Rechargez la page avec une connexion Internet.');return;}
+  try{
+    const buffer=await file.arrayBuffer(),wb=XLSX.read(buffer,{type:'array',cellDates:false}),sheets={};
+    wb.SheetNames.forEach(name=>sheets[name]=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,raw:true,defval:''}));
+    const sheet=wb.SheetNames.find(n=>/recap|récap|synth/i.test(n))||wb.SheetNames[0];
+    const numGuess=(file.name.match(/n[°o]?\s*(\d{1,2})/i)||[])[1];
+    const existing=Object.keys(ATTACH_XLS.periods||{}).sort();
+    ATTACH_IMPORT={fileName:file.name,sheetNames:wb.SheetNames,sheets,sheet,target:'market',marketCell:null,cumulCell:null,manualMarket:'',manualCumul:'',number:numGuess?+numGuess:(existing.length+1),period:existing.length?nextAttachMonth(existing.at(-1)):today().slice(0,7),note:''};
+    draw();
+  }catch(e){alert('Lecture du classeur impossible : '+(e?.message||e));}
+}
+function setAttachImportSheet(name){if(ATTACH_IMPORT&&ATTACH_IMPORT.sheets[name]){ATTACH_IMPORT.sheet=name;ATTACH_IMPORT.marketCell=null;ATTACH_IMPORT.cumulCell=null;draw();}}
+function setAttachImportTarget(t){if(ATTACH_IMPORT){ATTACH_IMPORT.target=t;draw();}}
+function setAttachImportField(k,v){if(ATTACH_IMPORT){ATTACH_IMPORT[k]=v;}}
+function pickAttachCell(r,c){
+  if(!ATTACH_IMPORT)return;const rows=ATTACH_IMPORT.sheets[ATTACH_IMPORT.sheet]||[],raw=rows[r]?.[c],n=dqeNumber(raw);
+  if(n===null){toast('Cette cellule ne contient pas un nombre.');return;}
+  const cell={r,c,ref:colLetter(c)+(r+1),value:n};
+  if(ATTACH_IMPORT.target==='market'){ATTACH_IMPORT.marketCell=cell;ATTACH_IMPORT.target='cumul';}else{ATTACH_IMPORT.cumulCell=cell;}
+  draw();
+}
+function cancelAttachImport(){ATTACH_IMPORT=null;draw();}
+function attachImportAmount(kind){const manual=dqeNumber(ATTACH_IMPORT?.[kind==='market'?'manualMarket':'manualCumul']);if(manual!==null)return manual;return ATTACH_IMPORT?.[kind==='market'?'marketCell':'cumulCell']?.value??null;}
+async function validateAttachImport(){
+  if(!ATTACH_IMPORT)return;if(!canAccessFinance()){toast('Réservé à la direction du projet.');return;}
+  const marche=attachImportAmount('market'),cumul=attachImportAmount('cumul'),number=Math.round(+ATTACH_IMPORT.number||0),period=String(ATTACH_IMPORT.period||'').trim();
+  if(!/^\d{4}-\d{2}$/.test(period)){alert('Indiquez la période au format AAAA-MM.');return;}
+  if(!(number>0)){alert('Indiquez le numéro d’attachement.');return;}
+  if(!(marche>0)){alert('Le montant du marché HT est requis (cellule désignée ou saisie manuelle).');return;}
+  if(!(cumul>=0)){alert('Le cumul attaché HT est requis (cellule désignée ou saisie manuelle).');return;}
+  if(cumul>marche*1.05&&!confirm('Le cumul dépasse le marché de plus de 5 %. Confirmer ?'))return;
+  if(ATTACH_XLS.periods[period]?.status==='validated'&&ATTACH_XLS.periods[period]?._persisted){alert(`La période ${period} est déjà validée. Une correction passe par une révision (fonction à venir) ; elle ne peut pas écraser une situation validée.`);return;}
+  const taux=cumul/marche*100;
+  if(!confirm(`Valider l’attachement N°${String(number).padStart(2,'0')} — ${attachMonthLabel(period)}\nMarché HT : ${attachMoney(marche)}\nCumul attaché HT : ${attachMoney(cumul)}\nTaux financier : ${taux.toFixed(2)} %\n\nCette situation sera figée et son taux publié sur le tableau de bord.`))return;
+  const src={fileName:ATTACH_IMPORT.fileName,sheet:ATTACH_IMPORT.sheet,marketCell:ATTACH_IMPORT.marketCell?.ref||'saisie manuelle',cumulCell:ATTACH_IMPORT.cumulCell?.ref||'saisie manuelle',importedAt:new Date().toISOString(),importedBy:PROFILE?.email||''};
+  ATTACH_XLS.periods[period]={key:period,number,label:attachMonthLabel(period),revision:'Importé',status:'validated',cutoff:endOfAttachMonth(period),previous:null,values:{},manual:{},imported:true,amounts:{marketHt:marche,cumulativeHt:cumul},source:src,note:cleanText(ATTACH_IMPORT.note||'',500)};
+  ATTACH_XLS.selected=period;ATTACH_XLS.mode=ATTACH_XLS.mode||'generic';
+  await saveAttachLedger();
+  await sb.from('audit_events').insert({project_id:ACTIVE_PROJECT_ID,actor_id:SESSION.user.id,action:'attachment.import',target:period,after:{number,taux:Math.round(taux*100)/100,source:src.fileName}});
+  ATTACH_IMPORT=null;ATTACH_XLS_LEVEL='recap';draw();toast(`Attachement N°${String(number).padStart(2,'0')} validé · ${taux.toFixed(1)} % publié`);
+}
+window.loadValidatedAttachmentFile=loadValidatedAttachmentFile;window.setAttachImportSheet=setAttachImportSheet;window.setAttachImportTarget=setAttachImportTarget;window.setAttachImportField=setAttachImportField;window.pickAttachCell=pickAttachCell;window.cancelAttachImport=cancelAttachImport;window.validateAttachImport=validateAttachImport;
+function renderAttachImportEntry(){
+  return`<div class="attach-empty-state"><div class="attach-empty-icon">▥</div><b>Importer un attachement validé</b><p>Le classeur signé ou validé (souvent celui du client) fait foi. L’application n’en retient que le montant du marché HT et le cumul attaché HT, désignés par la direction, et publie le taux financier. Les montants ne quittent pas la direction.</p><div><label class="bp dqe-file-button">Importer un attachement Excel<input type="file" accept=".xlsx,.xls" onchange="loadValidatedAttachmentFile(this)" hidden></label></div><small>Adapté aux attachements en plusieurs lots avec récapitulatif, comme aux attachements en un seul bloc.</small></div>`;
+}
+function renderAttachImporter(){
+  const I=ATTACH_IMPORT;if(!I)return renderAttachImportEntry();
+  const rows=(I.sheets[I.sheet]||[]).slice(0,120),ncol=Math.min(16,rows.reduce((m,r)=>Math.max(m,r.length),0));
+  const marche=attachImportAmount('market'),cumul=attachImportAmount('cumul'),taux=(marche>0&&cumul!==null)?cumul/marche*100:null;
+  const cellCls=(r,c)=>I.marketCell&&I.marketCell.r===r&&I.marketCell.c===c?'cell-market':I.cumulCell&&I.cumulCell.r===r&&I.cumulCell.c===c?'cell-cumul':'';
+  const grid=`<div class="attach-import-grid"><table><thead><tr><th></th>${Array.from({length:ncol},(_,c)=>`<th>${colLetter(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((row,r)=>`<tr><th>${r+1}</th>${Array.from({length:ncol},(_,c)=>{const v=row[c];const num=dqeNumber(v);return`<td class="${cellCls(r,c)} ${num!==null?'is-num':''}" onclick="pickAttachCell(${r},${c})" title="${escHtml(colLetter(c)+(r+1))}">${escHtml(typeof v==='number'?fmt(Math.round(v)):String(v??'').slice(0,40))}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>`;
+  return`<div class="dqe-import"><div class="dqe-import-head"><div><div class="st" style="margin:0">Import d’un attachement validé</div><span>${escHtml(I.fileName)} · lecture locale, seules deux valeurs seront enregistrées</span></div><button class="bt" onclick="cancelAttachImport()">Annuler</button></div>
+    <div class="dqe-step"><b>1. Identifier la situation</b><div class="dqe-source-grid">
+      <label><span>Feuille récapitulative</span><select class="fi" onchange="setAttachImportSheet(this.value)">${I.sheetNames.map(n=>`<option value="${escHtml(n)}" ${n===I.sheet?'selected':''}>${escHtml(n)}</option>`).join('')}</select></label>
+      <label><span>Numéro d’attachement *</span><input class="fi" type="number" min="1" value="${I.number}" onchange="setAttachImportField('number',this.value)"></label>
+      <label><span>Période (AAAA-MM) *</span><input class="fi" value="${escHtml(I.period)}" placeholder="2026-08" onchange="setAttachImportField('period',this.value)"></label>
+      <label><span>Commentaire</span><input class="fi" value="${escHtml(I.note)}" placeholder="Rev03 validée par le client le …" onchange="setAttachImportField('note',this.value)"></label></div></div>
+    <div class="dqe-step"><b>2. Désigner les deux valeurs</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <button class="${I.target==='market'?'bp':'bt'}" onclick="setAttachImportTarget('market')">Cliquer la cellule → Marché HT ${I.marketCell?`· ${I.marketCell.ref} = ${fmt(Math.round(I.marketCell.value))}`:''}</button>
+      <button class="${I.target==='cumul'?'bp':'bt'}" onclick="setAttachImportTarget('cumul')">Cliquer la cellule → Cumul attaché HT ${I.cumulCell?`· ${I.cumulCell.ref} = ${fmt(Math.round(I.cumulCell.value))}`:''}</button></div>${grid}
+      <div class="dqe-source-grid" style="margin-top:10px"><label><span>Ou saisir le marché HT</span><input class="fi" value="${escHtml(I.manualMarket)}" placeholder="ex. 1581060967" onchange="setAttachImportField('manualMarket',this.value)"></label><label><span>Ou saisir le cumul attaché HT</span><input class="fi" value="${escHtml(I.manualCumul)}" placeholder="ex. 1330122480" onchange="setAttachImportField('manualCumul',this.value)"></label></div></div>
+    <div class="dqe-step"><b>3. Contrôler et valider</b><div class="attach-import-summary"><span>Marché HT <b>${marche!==null?attachMoney(marche):'—'}</b></span><span>Cumul attaché HT <b>${cumul!==null?attachMoney(cumul):'—'}</b></span><span>Taux financier <b>${taux!==null?taux.toFixed(2)+' %':'—'}</b></span></div>
+      <div class="project-modal-actions" style="margin-top:10px"><button class="bt" onclick="cancelAttachImport()">Annuler</button><button class="bp" onclick="validateAttachImport()" ${taux===null?'disabled':''}>Valider et publier le taux</button></div></div></div>`;
+}
+function renderImportedAttachment(p,periods){
+  const a=p.amounts||{},taux=a.marketHt>0?(+a.cumulativeHt/+a.marketHt*100):null;
+  return`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Situation validée importée — le classeur source fait foi</div></div><div class="xls-app-actions no-print"><select class="fi" style="min-width:220px" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number||0).padStart(2,'0')} · ${escHtml(x.label||attachMonthLabel(x.key))} · ${x.status==='validated'?'validé':'brouillon'}</option>`).join('')}</select><label class="bt dqe-file-button">Importer un autre attachement<input type="file" accept=".xlsx,.xls" onchange="loadValidatedAttachmentFile(this)" hidden></label></div></div>
+    <div class="decision-grid" style="margin-top:12px">
+      <div class="decision-card decision-card--financial"><div class="decision-kicker">Taux financier</div><div class="decision-number">${taux!==null?taux.toFixed(2)+' %':'—'}</div><div class="decision-progress"><span style="width:${Math.min(100,taux||0)}%"></span></div><div class="decision-foot">Attachement N°${String(p.number||0).padStart(2,'0')} · ${escHtml(p.label||'')} · validé</div></div>
+      <div class="decision-card"><div class="decision-kicker">Marché HT</div><div class="decision-number decision-number--length">${attachMoney(+a.marketHt||0)}</div><div class="decision-foot">Base : montant du marché HT tel que porté au récapitulatif</div></div>
+      <div class="decision-card"><div class="decision-kicker">Cumul attaché HT</div><div class="decision-number decision-number--length">${attachMoney(+a.cumulativeHt||0)}</div><div class="decision-foot">Même base que le marché (règle du N°08)</div></div>
+    </div>
+    <div class="cd"><div class="ct">Source</div><div style="font-size:12px;color:#5a6778;line-height:1.7">Fichier <b>${escHtml(p.source?.fileName||'—')}</b> · feuille <b>${escHtml(p.source?.sheet||'—')}</b> · marché : cellule ${escHtml(p.source?.marketCell||'—')} · cumul : cellule ${escHtml(p.source?.cumulCell||'—')}<br>Importé le ${p.source?.importedAt?fD(p.source.importedAt.slice(0,10)):'—'} par ${escHtml(p.source?.importedBy||'—')}${p.note?`<br>Note : ${escHtml(p.note)}`:''}</div></div>
+    <div class="attach-disclaimer">Situation validée et verrouillée. Le détail par lot et par ligne reste dans le classeur source ; l’application n’en publie que le taux financier aux autres rôles.</div></div>`;
+}
 function pgAttachement(){
   const p=activeAttachPeriod(),periods=Object.values(ATTACH_XLS.periods).sort((a,b)=>b.key.localeCompare(a.key));
-  if(!p)return`<div class="mn xls-attachment"><div class="st">Attachement contractuel</div>${renderDqeImporter()}</div>`;
+  if(ATTACH_IMPORT)return`<div class="mn xls-attachment"><div class="st">Attachement contractuel</div>${renderAttachImporter()}</div>`;
+  if(!p)return`<div class="mn xls-attachment"><div class="st">Attachement contractuel</div><div class="attach-two-ways">${renderDqeImporter()}${DQE_IMPORT?'':renderAttachImportEntry()}</div></div>`;
+  if(p.imported)return renderImportedAttachment(p,periods);
   if(ATTACH_XLS.mode==='generic'){
     let h=`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Référentiel construit depuis le DQE validé</div></div><div class="xls-app-actions no-print"><select class="fi" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number).padStart(2,'0')} — ${x.label} · ${x.status==='validated'?'Validé':'Brouillon'}</option>`).join('')}</select><button class="bt" onclick="exportContractAttachmentExcel()">📊 Export Excel</button><button class="bt" onclick="printContractAttachment()">🖨 Imprimer</button>${p.status==='validated'?'<button class="bp" onclick="createNextContractAttachment()">+ Créer l’attachement du mois</button>':''}<button class="bp" onclick="beginContractAdjustment()">✎ Ajustement pour validation</button>${p.status==='draft'?'<button class="bt xls-validate" onclick="validateContractAttachment()">Valider l’attachement</button>':''}</div></div><div class="xls-document-head"><b>${contractAttachmentHeader(p)}</b><span>PROJET : ${escHtml(projectName().toUpperCase())}</span><span>ENTREPRISE : ${escHtml(PROJECT_CONFIG.identity?.company||'SIYO LIMITED')}</span></div>${renderGenericAttachment(p)}<div class="attach-disclaimer">${p.status==='validated'?'Situation validée et verrouillée.':'Brouillon local : les cumuls ajustés ne modifient pas les rapports terrain.'}</div></div>`;return h;
   }
@@ -3798,6 +3900,9 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f9fb;color:#2d3748
 .sync-status{display:flex;align-items:center;gap:6px;font-size:11px;color:rgba(255,255,255,.7);background:rgba(255,255,255,.06);padding:4px 12px;border-radius:14px}
 .sync-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.sd-green{background:#36b37e}.sd-red{background:#e74c3c}
 .sync-btn{background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;border-radius:4px}.sync-bar{background:#f5a623;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:500}
+.attach-two-ways{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}.attach-two-ways .dqe-import{grid-column:1/-1}
+.attach-import-grid{overflow:auto;max-height:340px;border:1px solid #eef1f6;border-radius:8px;background:#fff}.attach-import-grid table{border-collapse:collapse;font-size:11px;font-family:'JetBrains Mono',monospace}.attach-import-grid th{background:#f8fafc;color:#8a95a5;font-weight:500;padding:3px 6px;border:1px solid #f1f3f7;position:sticky;top:0}.attach-import-grid td{padding:3px 6px;border:1px solid #f1f3f7;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis;cursor:pointer}.attach-import-grid td.is-num{text-align:right;color:#0f1b2d}.attach-import-grid td:hover{background:#fff8e6}.attach-import-grid td.cell-market{background:#e6f7ef;font-weight:700}.attach-import-grid td.cell-cumul{background:#e8f1fd;font-weight:700}
+.attach-import-summary{display:flex;gap:24px;flex-wrap:wrap;font-size:13px;color:#5a6778}.attach-import-summary b{color:#0f1b2d;display:block;font-size:15px}
 .login-card{max-width:400px;margin:70px auto 0;padding:26px 26px 22px}.login-lede{color:#5a6778;font-size:13px;margin:0 0 14px}.login-msg{min-height:18px;font-size:12px;color:#e74c3c;margin-top:8px}
 .user-chip{gap:8px}.role-dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:#8a95a5}.role-direction,.role-admin{background:#36b37e}.role-chef_projet,.role-agent{background:#2c7be5}.role-visiteur,.role-lecteur{background:#f5a623}
 .project-switch{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#dce7f5;border-radius:18px;padding:6px 12px;font:600 10px 'DM Sans',sans-serif;cursor:pointer}.project-switch:hover{background:rgba(255,255,255,.15);color:#fff}
