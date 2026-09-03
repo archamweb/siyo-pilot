@@ -115,10 +115,11 @@ async function pushProjectConfigVersion(id,cfg,reason){
   const {error}=await sb.from('project_config').insert({project_id:id,version,config:stored,reason:motif,created_by:SESSION?.user?.id||null});
   if(!error&&dqe&&canAccessFinance()){const {error:ef}=await sb.from('project_finance').upsert({project_id:id,dqe,updated_by:SESSION?.user?.id||null},{onConflict:'project_id'});if(ef)toast('DQE non enregistré : '+ef.message);}
   if(error)toast('Configuration non enregistrée : '+error.message);
-  else{PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);await sb.from('projects').update({name:cfg.identity?.name,short_name:cfg.identity?.shortName,client:cfg.identity?.client,moe:cfg.identity?.owner,contractor:cfg.identity?.company,status:cfg.identity?.targetStatus||'preparation'}).eq('id',id);}
+  else{PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);auditLog('config.revise',`v${version}`,{reason:motif,total:projectConfigTotal(cfg)});await sb.from('projects').update({name:cfg.identity?.name,short_name:cfg.identity?.shortName,client:cfg.identity?.client,moe:cfg.identity?.owner,contractor:cfg.identity?.company,status:cfg.identity?.targetStatus||'preparation'}).eq('id',id);}
   return !error;
 }
-function saveProjectConfig(reason){if(!sb||!ACTIVE_PROJECT_ID)return;PROJECT_CONFIG_CACHE[ACTIVE_PROJECT_ID]=cloneProjectConfig(PROJECT_CONFIG);if(canAccessProjectSetup())pushProjectConfigVersion(ACTIVE_PROJECT_ID,PROJECT_CONFIG,reason);}
+let LAST_CONFIG_SAVE=Promise.resolve(false);
+function saveProjectConfig(reason){if(!sb||!ACTIVE_PROJECT_ID)return Promise.resolve(false);PROJECT_CONFIG_CACHE[ACTIVE_PROJECT_ID]=cloneProjectConfig(PROJECT_CONFIG);LAST_CONFIG_SAVE=canAccessProjectSetup()?pushProjectConfigVersion(ACTIVE_PROJECT_ID,PROJECT_CONFIG,reason):Promise.resolve(false);return LAST_CONFIG_SAVE;}
 let PROJECT_CONFIG=loadProjectConfig();
 function projectName(){return PROJECT_CONFIG.identity?.name||'Projet';}
 function projectShortName(){return PROJECT_CONFIG.identity?.shortName||PROJECT_CONFIG.identity?.name||'Projet';}
@@ -538,37 +539,64 @@ async function syncLoad(){
   const pid=ACTIVE_PROJECT_ID;syncing=true;draw();
   try{
     const [reps,states]=await Promise.all([
-      sb.from('daily_reports').select('report_date,payload').eq('project_id',pid).order('report_date'),
+      sb.from('daily_reports').select('report_date,payload,version').eq('project_id',pid).order('report_date'),
       sb.from('project_state').select('key,value').eq('project_id',pid)
     ]);
     if(pid!==ACTIVE_PROJECT_ID){syncing=false;draw();return;}
     if(reps.error)throw reps.error;if(states.error)throw states.error;
     const next={};
-    (reps.data||[]).forEach(r=>{next[normDate(r.report_date)]=r.payload;});
+    const versions={};(reps.data||[]).forEach(r=>{const k=normDate(r.report_date);next[k]=r.payload;versions[k]=r.version||1;});DB_VERSIONS=versions;
     (states.data||[]).forEach(s=>{next['__'+s.key+'__']=(s.key==='aleas'&&Array.isArray(s.value))?{aleas:s.value,dt:'__aleas__'}:s.value;});
     db=next;online=true;lastSync=stamp();
   }catch(e){console.error(e);online=false;toast('Lecture de la base impossible : '+(e?.message||e));}
   syncing=false;draw();
   try{await publishFinanceSummary();}catch(e){console.warn(e);}
 }
+// Versions serveur connues par date (contrôle de concurrence : un enregistrement n'écrase
+// que la version qu'il a lue ; sinon conflit signalé, jamais d'écrasement silencieux).
+let DB_VERSIONS={};
+function auditLog(action,target,after){try{if(!isConfigured())return;sb.from('audit_events').insert({project_id:ACTIVE_PROJECT_ID,actor_id:SESSION.user.id,action,target:String(target||''),after:after||null}).then(()=>{},()=>{});}catch(e){}}
 async function syncSave(d,data){
-  if(!canWrite()){toast('Lecture seule : ce rôle ne peut pas enregistrer.');return;}
-  db[d]=data;if(!isConfigured())return;syncing=true;draw();
+  if(!canWrite()){toast('Lecture seule : ce rôle ne peut pas enregistrer.');return false;}
+  if(!isConfigured()){toast('Non connecté à la base : rien n’a été enregistré.');return false;}
+  const had=Object.prototype.hasOwnProperty.call(db,d),previous=had?db[d]:undefined;
+  db[d]=data;syncing=true;draw();
+  let ok=false,message='';
   try{
-    const r=d.startsWith('__')
-      ?await sb.from('project_state').upsert({project_id:ACTIVE_PROJECT_ID,key:stateKeyOf(d),value:data,updated_by:SESSION.user.id},{onConflict:'project_id,key'})
-      :await sb.from('daily_reports').upsert({project_id:ACTIVE_PROJECT_ID,report_date:d,payload:data,author_id:SESSION.user.id},{onConflict:'project_id,report_date'});
-    if(r.error)throw r.error;online=true;lastSync=stamp();
-  }catch(e){online=false;toast('Enregistrement refusé par la base : '+(e?.message||e));}
-  syncing=false;
+    if(d.startsWith('__')){
+      const r=await sb.from('project_state').upsert({project_id:ACTIVE_PROJECT_ID,key:stateKeyOf(d),value:data,updated_by:SESSION.user.id},{onConflict:'project_id,key'});
+      if(r.error)throw r.error;ok=true;
+    }else{
+      const expected=DB_VERSIONS[d];
+      if(expected){
+        const r=await sb.from('daily_reports').update({payload:data,author_id:SESSION.user.id}).eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d).eq('version',expected).select('version');
+        if(r.error)throw r.error;
+        if(r.data&&r.data.length){DB_VERSIONS[d]=r.data[0].version||expected+1;ok=true;}
+        else{
+          const cur=await sb.from('daily_reports').select('version,updated_at').eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d).maybeSingle();
+          if(cur.data){message=`Conflit : le rapport du ${fD(d)} a été modifié par un autre utilisateur (version ${cur.data.version}, ${new Date(cur.data.updated_at).toLocaleString('fr-FR')}). Rechargez la page, puis réenregistrez.`;}
+          else{const ins=await sb.from('daily_reports').insert({project_id:ACTIVE_PROJECT_ID,report_date:d,payload:data,author_id:SESSION.user.id}).select('version');if(ins.error)throw ins.error;DB_VERSIONS[d]=ins.data?.[0]?.version||1;ok=true;}
+        }
+      }else{
+        const ins=await sb.from('daily_reports').insert({project_id:ACTIVE_PROJECT_ID,report_date:d,payload:data,author_id:SESSION.user.id}).select('version');
+        if(ins.error){if(ins.error.code==='23505'){const cur=await sb.from('daily_reports').select('version').eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d).maybeSingle();message=`Conflit : un rapport existe déjà pour le ${fD(d)} (version ${cur.data?.version||'?'}), créé par un autre utilisateur. Rechargez la page pour le voir avant de modifier.`;}else throw ins.error;}
+        else{DB_VERSIONS[d]=ins.data?.[0]?.version||1;ok=true;}
+      }
+    }
+    if(ok){online=true;lastSync=stamp();if(!d.startsWith('__'))auditLog('report.save',d,{version:DB_VERSIONS[d]||null,corrections:typeof countNegativeMovements==='function'?countNegativeMovements(data):null});}
+  }catch(e){message='Enregistrement refusé par la base : '+(e?.message||e);online=false;}
+  if(!ok){if(had)db[d]=previous;else delete db[d];toast(message||'Enregistrement impossible.');}
+  syncing=false;return ok;
 }
 async function syncDel(d){
-  if(!canWrite()){toast('Lecture seule : suppression impossible.');return;}
-  delete db[d];if(!isConfigured())return;
+  if(!canWrite()){toast('Lecture seule : suppression impossible.');return false;}
+  if(!isConfigured()){toast('Non connecté à la base : rien n’a été supprimé.');return false;}
+  const had=Object.prototype.hasOwnProperty.call(db,d),previous=had?db[d]:undefined;delete db[d];
   const r=d.startsWith('__')
     ?await sb.from('project_state').delete().eq('project_id',ACTIVE_PROJECT_ID).eq('key',stateKeyOf(d))
     :await sb.from('daily_reports').delete().eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d);
-  if(r.error)toast('Suppression refusée par la base : '+r.error.message);
+  if(r.error){if(had)db[d]=previous;toast('Suppression refusée par la base : '+r.error.message);return false;}
+  delete DB_VERSIONS[d];if(!d.startsWith('__'))auditLog('report.delete',d,null);return true;
 }
 
 // Helper : retourne les clés de db excluant les clés spéciales (aléas, etc.)
@@ -1119,14 +1147,14 @@ function projectRegistrySummary(record){
   return{cfg,total,reports,latestDate,fronts:cfg?.localities?.length||0,status:record.status||cfg?.identity?.targetStatus||'preparation'};
 }
 async function loadRegistryFromSupabase(){
-  const {data:mem,error}=await sb.from('project_members').select('project_id,role,projects(id,code,name,short_name,client,moe,contractor,status,is_demo,created_at)').eq('user_id',SESSION.user.id);
+  const {data:mem,error}=await sb.from('project_members').select('project_id,role,projects(id,code,name,short_name,client,moe,contractor,status,previous_status,is_demo,created_at)').eq('user_id',SESSION.user.id);
   if(error){toast('Projets illisibles : '+error.message);return;}
   MEMBERSHIPS=(mem||[]).map(m=>({project_id:m.project_id,role:m.role}));
   let rows=(mem||[]).filter(m=>m.projects).map(m=>m.projects);
-  if(isAdminUser()){const {data:all}=await sb.from('projects').select('id,code,name,short_name,client,moe,contractor,status,is_demo,created_at');(all||[]).forEach(p=>{if(!rows.some(r=>r.id===p.id))rows.push(p);});}
+  if(isAdminUser()){const {data:all}=await sb.from('projects').select('id,code,name,short_name,client,moe,contractor,status,previous_status,is_demo,created_at');(all||[]).forEach(p=>{if(!rows.some(r=>r.id===p.id))rows.push(p);});}
   const byP={};
   if(rows.length){const {data:counts}=await sb.from('daily_reports').select('project_id,report_date').in('project_id',rows.map(r=>r.id));(counts||[]).forEach(c=>{const b=byP[c.project_id]||(byP[c.project_id]={n:0,last:''});b.n++;if(c.report_date>b.last)b.last=c.report_date;});}
-  PROJECT_REGISTRY={version:2,projects:rows.map(p=>({id:p.id,code:p.code,name:p.name,shortName:p.short_name||p.name,client:p.client||'',moe:p.moe||'',company:p.contractor||'SIYO LIMITED',status:p.status,isDemo:!!p.is_demo,storage:'remote',createdAt:p.created_at,reports:byP[p.id]?.n||0,latestDate:byP[p.id]?.last||''}))};
+  PROJECT_REGISTRY={version:2,projects:rows.map(p=>({id:p.id,code:p.code,name:p.name,shortName:p.short_name||p.name,client:p.client||'',moe:p.moe||'',company:p.contractor||'SIYO LIMITED',status:p.status,previousStatus:p.previous_status||null,isDemo:!!p.is_demo,storage:'remote',createdAt:p.created_at,reports:byP[p.id]?.n||0,latestDate:byP[p.id]?.last||''}))};
   DEFAULT_PROJECT_ID=(rows.find(p=>p.is_demo)||rows[0])?.id||'';
 }
 const PROJECT_STATUS={preparation:'En préparation',active:'En cours',suspended:'En suspens',works_completed:'Travaux terminés',closed:'Projet achevé',abandoned:'Abandonné',archived:'Archivé',completed:'Projet achevé'};
@@ -1137,11 +1165,13 @@ function uniqueProjectId(name){const base=projectIdSlug(name);let id=base,n=2;wh
 async function setProjectArchived(id,archived=true){
   const record=PROJECT_REGISTRY.projects.find(p=>p.id===id);if(!record)return;
   const mine=MEMBERSHIPS.find(m=>m.project_id===id)?.role;if(!(isAdminUser()||mine==='direction')){toast('Archivage réservé à la direction du projet.');return;}
-  const next=archived?'archived':'preparation';
-  const {error}=await sb.from('projects').update({status:next}).eq('id',id);
+  const next=archived?'archived':(record.previousStatus||'preparation');
+  const patch=archived?{status:'archived',previous_status:record.status||'preparation'}:{status:next,previous_status:null};
+  const {error}=await sb.from('projects').update(patch).eq('id',id);
   if(error){toast('Statut refusé par la base : '+error.message);return;}
-  record.status=next;if(id===ACTIVE_PROJECT_ID){PROJECT_CONFIG.identity.targetStatus=next;}
-  draw();toast(archived?'Projet archivé':'Projet restauré');
+  record.previousStatus=archived?record.status:null;record.status=next;if(id===ACTIVE_PROJECT_ID){PROJECT_CONFIG.identity.targetStatus=next;}
+  auditLog('project.status',record.code||id,{from:archived?record.previousStatus:'archived',to:next});
+  draw();toast(archived?'Projet archivé':`Projet restauré (${projectStatusLabel(next)})`);
 }
 async function deleteProject(id){
   alert('La suppression définitive d’un projet est réservée à l’administrateur SIYO, depuis la console Supabase, après sauvegarde. Utilisez l’archivage.');
@@ -1309,12 +1339,14 @@ function projectConfigErrors(cfg){
   if(cfg.planning?.mode==='manual'){if(!rows.length)errors.push('Le planning contractuel doit contenir au moins un mois.');else{let pg=-1,pp=-1;const seen=new Set();rows.forEach(r=>{if(!/^\d{4}-\d{2}$/.test(r.month||''))errors.push('Le mois du planning est invalide.');if(seen.has(r.month))errors.push(`Le mois ${r.month} apparaît deux fois dans le planning.`);seen.add(r.month);if(r.global===''||r.pose==='')errors.push(`Planning ${r.month} : les deux pourcentages sont obligatoires.`);if(+r.global<pg)errors.push(`Planning global décroissant en ${r.month}.`);if(+r.pose<pp)errors.push(`Planning de pose décroissant en ${r.month}.`);pg=+r.global;pp=+r.pose;});if(Math.abs(pg-100)>.01)errors.push('Le planning physique global doit se terminer à 100 %.');if(Math.abs(pp-100)>.01)errors.push('Le planning de pose doit se terminer à 100 %.');}if(!plan?.deadline)errors.push('L’échéance du planning contractuel est obligatoire.');if(cfg.identity?.startDate&&plan?.deadline&&plan.deadline<cfg.identity.startDate)errors.push('L’échéance contractuelle ne peut pas précéder la date de démarrage.');}
   if(!cfg._revision?.reason?.trim())errors.push('Le motif de la révision est obligatoire.');return errors;
 }
-function validateProjectRevision(){
+async function validateProjectRevision(){
   if(!PARAM_DRAFT)return;normalizeProjectConfig(PARAM_DRAFT);const errors=projectConfigErrors(PARAM_DRAFT);if(errors.length){alert('Validation impossible :\n\n• '+errors.join('\n• '));return;}if(!confirm('Valider et appliquer cette révision au projet ?'))return;
   const previousTotal=projectConfigTotal(PROJECT_CONFIG),newTotal=projectConfigTotal(PARAM_DRAFT),meta=PARAM_DRAFT._revision,plan=activePlanningVersion(PARAM_DRAFT);if(plan?.rows?.length){plan.locked=true;plan.validatedAt=new Date().toISOString();}
   delete PARAM_DRAFT._revision;PARAM_DRAFT.validatedAt=new Date().toISOString();PARAM_DRAFT.revisions=PARAM_DRAFT.revisions||[];PARAM_DRAFT.revisions.push({date:PARAM_DRAFT.validatedAt,reason:meta.reason,author:CURRENT_USER_CONTEXT.label,previousTotal,newTotal});applyProjectConfiguration(PARAM_DRAFT);
-  const pilotage=getPilotageSettings(),targetDate=PARAM_DRAFT.identity?.targetDate||'';syncSave(PILOTAGE_SETTINGS_KEY,{pilotage:{...pilotage,targetMode:targetDate?'date':'undefined',targetDate,updatedAt:new Date().toISOString()},dt:PILOTAGE_SETTINGS_KEY});
-  PARAM_DRAFT=null;localStorage.removeItem(scopedStorageKey(PROJECT_DRAFT_KEY));draw();toast('Paramétrage validé et appliqué');
+  const savedConfig=await LAST_CONFIG_SAVE;
+  if(!savedConfig){toast('Paramétrage non enregistré dans la base — le brouillon est conservé.');draw();return;}
+  const pilotage=getPilotageSettings(),targetDate=PARAM_DRAFT.identity?.targetDate||'';await syncSave(PILOTAGE_SETTINGS_KEY,{pilotage:{...pilotage,targetMode:targetDate?'date':'undefined',targetDate,updatedAt:new Date().toISOString()},dt:PILOTAGE_SETTINGS_KEY});
+  PARAM_DRAFT=null;localStorage.removeItem(scopedStorageKey(PROJECT_DRAFT_KEY));draw();toast('Paramétrage validé et enregistré dans la base centrale');
 }window.validateProjectRevision=validateProjectRevision;
 function paramField(label,section,key,type='text',suffix=''){
   const cfg=activeProjectParamConfig(),value=cfg?.[section]?.[key]??'',editable=!!PARAM_DRAFT,inputType=type==='number'?'number':type==='date'?'date':'text';return`<label class="param-field"><span>${label}</span>${editable?`<input class="fi" type="${inputType}" value="${escHtml(value)}" ${type==='number'?'step="0.01"':''} onchange="projectDraftSet('${section}','${key}',this.value,'${type}')">`:`<b>${value!==''?escHtml(value):'Non renseigné'}</b>`}${suffix?`<small>${suffix}</small>`:''}</label>`;
@@ -1680,7 +1712,7 @@ async function save(){
     const msg=top5.map(a=>`${a.loc}${a.zone?' '+a.zone:''}${a.dn?' DN'+a.dn:''}: ${a.type==='R>F'?'R('+fmt(a.r)+')>F('+fmt(a.f)+')':'R('+fmt(a.r)+')>S('+fmt(a.s)+')'} +${fmt(a.excess)}ml`).join('\n');
     if(!confirm(`⚠️ ${alerts.length} incohérence${alerts.length>1?'s':''} détectée${alerts.length>1?'s':''}:\n\n${msg}${alerts.length>5?'\n... et '+(alerts.length-5)+' autres':''}\n\nEnregistrer quand même ?`))return;
   }
-  await syncSave(SD,data);toast('✅ Enregistré'+(online?' (sync)':' (local)'));draw();}
+  const ok=await syncSave(SD,data);if(ok)toast('✅ Enregistré dans la base centrale');draw();}
 async function saveGo(){
   const data=collect();
   const constraintError=constraintValidationError(data);
@@ -1693,7 +1725,7 @@ async function saveGo(){
     const msg=top5.map(a=>`${a.loc}${a.dn?' DN'+a.dn:''}: ${a.type} +${fmt(a.excess)}ml`).join('\n');
     if(!confirm(`⚠️ ${alerts.length} incohérence${alerts.length>1?'s':''}:\n${msg}\n\nEnregistrer ?`))return;
   }
-  await syncSave(SD,data);V='rapport';draw();}
+  if(await syncSave(SD,data))V='rapport';draw();}
 
 function renderReportConstraints(date,rp){
   const contraintesJour=constraintsForReport(date,rp);
@@ -3310,7 +3342,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.1 — Base centrale Supabase · indice de continuité · attachement validé importé (03/09/2026)',
+      version_app:'2.2 — Base centrale Supabase · écritures confirmées et contrôle de version (03/09/2026)',
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -3509,12 +3541,13 @@ async function loadAttachLedgerRemote(){
   const keys=Object.keys(ledger.periods).sort();ledger.selected=keys.at(-1)||'';ATTACH_XLS=ledger;
 }
 async function saveAttachLedger(){
-  if(!isConfigured()||!canAccessFinance()){toast('Attachements réservés à la direction du projet.');return;}
+  if(!isConfigured()||!canAccessFinance()){toast('Attachements réservés à la direction du projet.');return false;}
   const pending=Object.values(ATTACH_XLS.periods||{}).filter(p=>!(p._persisted&&p.status==='validated'));
   const rows=pending.map(p=>({project_id:ACTIVE_PROJECT_ID,period:p.key,number:p.number||null,status:p.status==='validated'?'validated':'draft',ledger:{...p,_updated:undefined,_persisted:undefined},validated_by:p.status==='validated'?SESSION.user.id:null,validated_at:p.status==='validated'?new Date().toISOString():null}));
-  if(!rows.length){await publishFinanceSummary();return;}
+  if(!rows.length){await publishFinanceSummary();return true;}
   const {error}=await sb.from('attachment_periods').upsert(rows,{onConflict:'project_id,period,status'});
-  if(error)toast('Attachement non enregistré : '+error.message);else{pending.forEach(p=>{p._persisted=true;});await publishFinanceSummary();}
+  if(error){toast('Attachement non enregistré : '+error.message);return false;}
+  pending.forEach(p=>{p._persisted=true;});await publishFinanceSummary();return true;
 }
 function activeAttachPeriod(){return ATTACH_XLS.periods[ATTACH_XLS.selected]||ATTACH_XLS.periods['2026-08']||null;}
 function attachMonthLabel(key){const [y,m]=key.split('-').map(Number);return new Date(Date.UTC(y,m-1,1)).toLocaleDateString('fr-FR',{month:'long',year:'numeric',timeZone:'UTC'}).replace(/^./,c=>c.toUpperCase());}
@@ -3647,9 +3680,12 @@ function beginContractAdjustment(lotId){
   }
   ATTACH_XLS_LOT=lotId||ATTACH_XLS_LOT||'oume';ATTACH_XLS_LEVEL=ATTACH_XLS.mode==='generic'?'recap':'lot';ATTACH_XLS_EDIT=true;saveAttachLedger();draw();window.scrollTo(0,0);
 }
-function validateContractAttachment(){
-  const p=activeAttachPeriod();if(p.status!=='draft')return;if(!confirm(`Valider l'attachement N°${String(p.number).padStart(2,'0')} ? Les cumuls deviendront les précédents du mois suivant.`))return;
-  if(ATTACH_XLS.mode==='generic')(PROJECT_CONFIG.finance?.dqe?.lines||[]).filter(l=>!dqeIsHeadingLine(l)).forEach(line=>p.values[line.id]=genericAttachmentLineValues(p,line).cumulative);else Object.keys(ATTACH_EXCEL_LOTS).forEach(lotId=>xlsRows(lotId).filter(r=>xlsIsLeaf(lotId,r)).forEach(r=>{p.values[attachRowKey(lotId,r.r)]=xlsLineValues(p,lotId,r.r,new Map())[7];}));p.status='validated';p.revision='Validé';p.validatedAt=new Date().toISOString();ATTACH_XLS_EDIT=false;saveAttachLedger();draw();toast('Attachement validé — cumuls figés pour le mois suivant');
+async function validateContractAttachment(){
+  const p=activeAttachPeriod();if(p.status!=='draft')return;const snapshot=JSON.stringify(p);if(!confirm(`Valider l'attachement N°${String(p.number).padStart(2,'0')} ? Les cumuls deviendront les précédents du mois suivant.`))return;
+  if(ATTACH_XLS.mode==='generic')(PROJECT_CONFIG.finance?.dqe?.lines||[]).filter(l=>!dqeIsHeadingLine(l)).forEach(line=>p.values[line.id]=genericAttachmentLineValues(p,line).cumulative);else Object.keys(ATTACH_EXCEL_LOTS).forEach(lotId=>xlsRows(lotId).filter(r=>xlsIsLeaf(lotId,r)).forEach(r=>{p.values[attachRowKey(lotId,r.r)]=xlsLineValues(p,lotId,r.r,new Map())[7];}));p.status='validated';p.revision='Validé';p.validatedAt=new Date().toISOString();ATTACH_XLS_EDIT=false;
+  const ok=await saveAttachLedger();
+  if(!ok){ATTACH_XLS.periods[p.key]=JSON.parse(snapshot);draw();toast('Validation non enregistrée — la période reste en brouillon');return;}
+  auditLog('attachment.validate',p.key,{number:p.number});draw();toast('Attachement validé et enregistré — cumuls figés pour le mois suivant');
 }
 window.createNextContractAttachment=createNextContractAttachment;window.selectContractAttachment=selectContractAttachment;window.openContractLot=openContractLot;window.backToContractRecap=backToContractRecap;window.stageContractQty=stageContractQty;window.resetContractQty=resetContractQty;window.beginContractAdjustment=beginContractAdjustment;window.validateContractAttachment=validateContractAttachment;
 
@@ -3814,8 +3850,9 @@ async function validateAttachImport(){
   const src={fileName:ATTACH_IMPORT.fileName,sheet:ATTACH_IMPORT.sheet,marketCell:ATTACH_IMPORT.marketCell?.ref||'saisie manuelle',cumulCell:ATTACH_IMPORT.cumulCell?.ref||'saisie manuelle',importedAt:new Date().toISOString(),importedBy:PROFILE?.email||''};
   ATTACH_XLS.periods[period]={key:period,number,label:attachMonthLabel(period),revision:'Importé',status:'validated',cutoff:endOfAttachMonth(period),previous:null,values:{},manual:{},imported:true,amounts:{marketHt:marche,cumulativeHt:cumul},source:src,note:cleanText(ATTACH_IMPORT.note||'',500)};
   ATTACH_XLS.selected=period;ATTACH_XLS.mode=ATTACH_XLS.mode||'generic';
-  await saveAttachLedger();
-  await sb.from('audit_events').insert({project_id:ACTIVE_PROJECT_ID,actor_id:SESSION.user.id,action:'attachment.import',target:period,after:{number,taux:Math.round(taux*100)/100,source:src.fileName}});
+  const saved=await saveAttachLedger();
+  if(!saved){delete ATTACH_XLS.periods[period];ATTACH_XLS.selected=Object.keys(ATTACH_XLS.periods).sort().at(-1)||'';draw();toast('Import non enregistré — aucune situation n’a été créée');return;}
+  auditLog('attachment.import',period,{number,taux:Math.round(taux*100)/100,source:src.fileName});
   ATTACH_IMPORT=null;ATTACH_XLS_LEVEL='recap';draw();toast(`Attachement N°${String(number).padStart(2,'0')} validé · ${taux.toFixed(1)} % publié`);
 }
 window.loadValidatedAttachmentFile=loadValidatedAttachmentFile;window.setAttachImportSheet=setAttachImportSheet;window.setAttachImportTarget=setAttachImportTarget;window.setAttachImportField=setAttachImportField;window.pickAttachCell=pickAttachCell;window.cancelAttachImport=cancelAttachImport;window.validateAttachImport=validateAttachImport;
