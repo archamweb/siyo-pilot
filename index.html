@@ -1227,7 +1227,7 @@ async function afterLogin(session){
   if(!PROJECT_REGISTRY.projects.length){V='projects';draw();return;}
   const remembered=PROJECT_REGISTRY.projects.some(p=>p.id===ACTIVE_PROJECT_ID)?ACTIVE_PROJECT_ID:DEFAULT_PROJECT_ID;
   V='projects';draw();
-  if(remembered)await switchProject(remembered,'projects',true);
+  if(remembered)await switchProject(remembered,localStorage.getItem(ACTIVE_PROJECT_KEY)===remembered?'home':'projects',true);
 }
 async function login(){
   const email=document.getElementById('login_email')?.value.trim(),password=document.getElementById('login_password')?.value;
@@ -3880,7 +3880,7 @@ function renderAttachImporter(){
 }
 function renderImportedAttachment(p,periods){
   const a=p.amounts||{},taux=a.marketHt>0?(+a.cumulativeHt/+a.marketHt*100):null;
-  return`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Situation validée importée — le classeur source fait foi</div></div><div class="xls-app-actions no-print"><select class="fi" style="min-width:220px" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number||0).padStart(2,'0')} · ${escHtml(x.label||attachMonthLabel(x.key))} · ${x.status==='validated'?'validé':'brouillon'}</option>`).join('')}</select><label class="bt dqe-file-button">Importer un autre attachement<input type="file" accept=".xlsx,.xls" onchange="loadValidatedAttachmentFile(this)" hidden></label></div></div>
+  return`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Situation validée importée — le classeur source fait foi</div></div><div class="xls-app-actions no-print"><select class="fi" style="min-width:220px" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number||0).padStart(2,'0')} · ${escHtml(x.label||attachMonthLabel(x.key))} · ${x.status==='validated'?'validé':'brouillon'}</option>`).join('')}</select><button class="bs" onclick="openAttachmentBuilder()">Créer un attachement depuis le DQE</button><label class="bp dqe-file-button">Importer un autre attachement<input type="file" accept=".xlsx,.xls" onchange="loadValidatedAttachmentFile(this)" hidden></label></div></div>
     <div class="decision-grid" style="margin-top:12px">
       <div class="decision-card decision-card--financial"><div class="decision-kicker">Taux financier</div><div class="decision-number">${taux!==null?taux.toFixed(2)+' %':'—'}</div><div class="decision-progress"><span style="width:${Math.min(100,taux||0)}%"></span></div><div class="decision-foot">Attachement N°${String(p.number||0).padStart(2,'0')} · ${escHtml(p.label||'')} · validé</div></div>
       <div class="decision-card"><div class="decision-kicker">Marché HT</div><div class="decision-number decision-number--length">${attachMoney(+a.marketHt||0)}</div><div class="decision-foot">Base : montant du marché HT tel que porté au récapitulatif</div></div>
@@ -3889,8 +3889,16 @@ function renderImportedAttachment(p,periods){
     <div class="cd"><div class="ct">Source</div><div style="font-size:12px;color:#5a6778;line-height:1.7">Fichier <b>${escHtml(p.source?.fileName||'—')}</b> · feuille <b>${escHtml(p.source?.sheet||'—')}</b> · marché : cellule ${escHtml(p.source?.marketCell||'—')} · cumul : cellule ${escHtml(p.source?.cumulCell||'—')}<br>Importé le ${p.source?.importedAt?fD(p.source.importedAt.slice(0,10)):'—'} par ${escHtml(p.source?.importedBy||'—')}${p.note?`<br>Note : ${escHtml(p.note)}`:''}</div></div>
     <div class="attach-disclaimer">Situation validée et verrouillée. Le détail par lot et par ligne reste dans le classeur source ; l’application n’en publie que le taux financier aux autres rôles.</div></div>`;
 }
+let ATTACH_SHOW_BUILDER=false;
+function openAttachmentBuilder(){
+  if(PROJECT_CONFIG.finance?.dqe?.lines?.length){ATTACH_SHOW_BUILDER=false;createNextContractAttachment();return;}
+  ATTACH_SHOW_BUILDER=true;draw();
+}
+function closeAttachmentBuilder(){ATTACH_SHOW_BUILDER=false;DQE_IMPORT=null;draw();}
+window.openAttachmentBuilder=openAttachmentBuilder;window.closeAttachmentBuilder=closeAttachmentBuilder;
 function pgAttachement(){
   const p=activeAttachPeriod(),periods=Object.values(ATTACH_XLS.periods).sort((a,b)=>b.key.localeCompare(a.key));
+  if(ATTACH_SHOW_BUILDER)return`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Construire un attachement dans l'application à partir du DQE</div></div><div class="xls-app-actions no-print"><button class="bs" onclick="closeAttachmentBuilder()">← Retour aux situations</button></div></div><div class="attach-note" style="font-size:11px;color:#8a95a5;margin:0 0 10px">Un attachement construit ici suit ses propres lignes DQE. Il ne reprend pas automatiquement le détail d'une situation importée : un total validé ne permet pas de reconstituer les cumuls par ligne.</div>${renderDqeImporter()}</div>`;
   if(ATTACH_IMPORT)return`<div class="mn xls-attachment"><div class="st">Attachement contractuel</div>${renderAttachImporter()}</div>`;
   if(!p)return`<div class="mn xls-attachment"><div class="st">Attachement contractuel</div><div class="attach-two-ways">${renderDqeImporter()}${DQE_IMPORT?'':renderAttachImportEntry()}</div></div>`;
   if(p.imported)return renderImportedAttachment(p,periods);
@@ -4111,6 +4119,9 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f9fb;color:#2d3748
   .nv{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}.nv::-webkit-scrollbar{display:none}
   .nb{flex:0 0 auto;padding:9px 12px;font-size:11px;white-space:nowrap}
   .st{font-size:14px}.ct{font-size:12px}
+  .dnt{min-width:0;width:100%;table-layout:fixed}.dnt th,.dnt td{padding:3px 2px!important;font-size:11px}
+  .dnt th:nth-child(2),.dnt td:nth-child(2){display:none}
+  .dnt .ci{width:100%;min-width:0;padding:6px 3px;font-size:12px}.dntg{padding:2px 4px;font-size:9px}
   .dashboard-context{margin-left:0;line-height:1.5}.decision-grid,.activity-overview{grid-template-columns:1fr}.decision-card--quality{grid-column:auto}.decision-card{min-height:auto}.decision-number{font-size:30px}
   .projection-config-grid,.projection-result{grid-template-columns:1fr}.projection-actions{align-items:stretch;flex-direction:column}.projection-actions .bp{width:100%}
   .constraint-grid,.constraint-grid--main,.constraint-kpis,.constraint-register-kpis{grid-template-columns:1fr}.constraint-grid .constraint-wide{grid-column:auto}.constraint-dashboard-head,.constraint-form-intro,.constraint-register-intro{align-items:stretch;flex-direction:column}.constraint-register-actions,.constraint-date-actions{align-items:stretch;flex-direction:column}.constraint-date-picker.is-open{display:flex;flex-direction:column;align-items:stretch}.constraint-report-top{align-items:flex-start;flex-direction:column}
