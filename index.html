@@ -1193,15 +1193,16 @@ async function createProjectFromForm(){
   PROJECT_CREATE_OPEN=false;await switchProject(p.id,'settings',true);beginProjectRevision();
 }
 window.createProjectFromForm=createProjectFromForm;
+let LOADED_PROJECT_ID='';
 async function switchProject(id,target='home',skipConfirm=false){
-  if(id===ACTIVE_PROJECT_ID&&target!=='projects'){V=target;draw();return;}
+  if(id===ACTIVE_PROJECT_ID&&LOADED_PROJECT_ID===id&&target!=='projects'){V=target;draw();return;}
   if(PARAM_DRAFT&&!skipConfirm&&!confirm('Une révision du paramétrage est ouverte. Changer de projet sans la valider ?'))return;
   ACTIVE_PROJECT_ID=id;localStorage.setItem(ACTIVE_PROJECT_KEY,id);refreshUserContext();
   PROJECT_CONFIG=await loadProjectConfigRemote(id);LOC=cloneProjectConfig(PROJECT_CONFIG.localities||[]);ZN=[...new Set(LOC.map(l=>l.z))];PHYSICAL_WEIGHTS={...PROJECT_CONFIG.weights};ETAT_INITIAL_DATE=PROJECT_CONFIG.initial?.date||'';ETAT_INITIAL=PROJECT_CONFIG.initial?.bardage||{};
   PARAM_DRAFT=loadProjectDraft();PARAM_SELECTED_LOC=PROJECT_CONFIG.localities?.[0]?.id||'';PARAM_SECTION='identity';
   db=loadProjectDb();online=false;syncing=false;lastSync='';SD=today();DG_LOC_DETAIL=null;ATTACH_XLS_LEVEL='recap';ATTACH_XLS_EDIT=false;DQE_IMPORT=null;
   ATTACH_XLS=defaultAttachLedger();if(canAccessFinance())await loadAttachLedgerRemote();
-  document.title=`SIYO Pilot — ${projectShortName()}`;V=target;draw();if(isConfigured())await syncLoad();
+  document.title=`SIYO Pilot — ${projectShortName()}`;V=target;draw();if(isConfigured())await syncLoad();LOADED_PROJECT_ID=id;
 }
 window.switchProject=switchProject;
 function pgProjects(){
