@@ -67,7 +67,7 @@ function persistProjectDb(){/* les rapports vivent dans Supabase (daily_reports)
 const PROJECT_CONFIG_KEY='siyoPilot.projectConfig.v2';
 function defaultProjectConfig(){return{
   version:1,status:'active',validatedAt:'2026-08-31T00:00:00.000Z',
-  identity:{name:'AEP Kimoukro — Dispersion 1B',shortName:'Dispersion 1B',code:'',client:'Non renseigné',owner:'Non renseigné',company:'SUD SUD BTP - SIYO LIMITED',startDate:'',targetDate:'',targetStatus:'suspended'},
+  identity:{name:'AEP Kimoukro — Dispersion 1B',shortName:'Dispersion 1B',code:'',client:'Non renseigné',owner:'Non renseigné',company:'SIYO LIMITED',startDate:'',targetDate:'',targetStatus:'suspended'},
   localities:JSON.parse(JSON.stringify(DEFAULT_LOC)),weights:{...DEFAULT_PHYSICAL_WEIGHTS},
   initial:{date:'2026-01-30'},migration:{legacyPreparationFrozen:true,mobilisationOverride:100,rinseValidationDate:'2026-08-27',rinsedLocalities:['toumodi','kokoumbo','gbonti','zahakro','angoda']},
   finance:{attachmentTemplate:'Attachement contractuel N°08 — Rev03',dqeStatus:'DQE et prix unitaires raccordés',discount:15,retention:5},
@@ -104,12 +104,16 @@ async function loadProjectConfigRemote(id){
   if(row?.config?.identity&&row?.config?.localities)cfg=normalizeProjectConfig(cloneProjectConfig(row.config));
   else if(row?.config?.source==='export_v1'){cfg=configFromExportV1(row.config,record);PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);if(canAccessProjectSetup())await pushProjectConfigVersion(id,cfg,'Conversion de l’export V1 vers la configuration V2');}
   else{cfg=blankProjectConfig(record?.name||'Nouveau projet',record?.shortName||'',record?.company||'SIYO LIMITED',record?.client||'');PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);if(canAccessProjectSetup())await pushProjectConfigVersion(id,cfg,null);}
+  cfg.finance=cfg.finance||{};cfg.finance.dqe=null;
+  if(canAccessFinance()){const {data:fin}=await sb.from('project_finance').select('dqe').eq('project_id',id).maybeSingle();if(fin?.dqe)cfg.finance.dqe=fin.dqe;}
   PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);return cfg;
 }
 async function pushProjectConfigVersion(id,cfg,reason){
   const {data:rows}=await sb.from('project_config').select('version').eq('project_id',id).order('version',{ascending:false}).limit(1);
   const version=(rows?.[0]?.version||0)+1;let motif=version>1?String(reason||cfg.revisions?.at(-1)?.reason||'Mise à jour du paramétrage'):null;if(motif&&motif.length<8)motif+=' (révision)';
-  const {error}=await sb.from('project_config').insert({project_id:id,version,config:cfg,reason:motif,created_by:SESSION?.user?.id||null});
+  const stored=cloneProjectConfig(cfg);const dqe=stored.finance?.dqe||null;if(stored.finance)stored.finance.dqe=null;
+  const {error}=await sb.from('project_config').insert({project_id:id,version,config:stored,reason:motif,created_by:SESSION?.user?.id||null});
+  if(!error&&dqe&&canAccessFinance()){const {error:ef}=await sb.from('project_finance').upsert({project_id:id,dqe,updated_by:SESSION?.user?.id||null},{onConflict:'project_id'});if(ef)toast('DQE non enregistré : '+ef.message);}
   if(error)toast('Configuration non enregistrée : '+error.message);
   else{PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);await sb.from('projects').update({name:cfg.identity?.name,short_name:cfg.identity?.shortName,client:cfg.identity?.client,moe:cfg.identity?.owner,contractor:cfg.identity?.company,status:cfg.identity?.targetStatus||'preparation'}).eq('id',id);}
   return !error;
@@ -529,6 +533,7 @@ async function syncLoad(){
     db=next;online=true;lastSync=stamp();
   }catch(e){console.error(e);online=false;toast('Lecture de la base impossible : '+(e?.message||e));}
   syncing=false;draw();
+  try{await publishFinanceSummary();}catch(e){console.warn(e);}
 }
 async function syncSave(d,data){
   if(!canWrite()){toast('Lecture seule : ce rôle ne peut pas enregistrer.');return;}
@@ -825,7 +830,9 @@ function syntheseFinanciereValidee(){
   const totalFacture=contractRecapRows(period)[42]||[],marche=+(totalFacture[5]||0),cumul=+(totalFacture[8]||0);
   return{period,marche,cumul,taux:marche>0?cumul/marche*100:null};
 }
-function avancementFinancier(){return syntheseFinanciereValidee()?.taux??null;}
+function avancementFinancier(){const live=syntheseFinanciereValidee()?.taux;if(Number.isFinite(live))return live;const shared=db?.__finance_summary__;return Number.isFinite(+shared?.taux)?+shared.taux:null;}
+function financeSummaryPayload(){const s=syntheseFinanciereValidee();if(!s)return null;return{taux:Math.round(s.taux*100)/100,period:{key:s.period.key,number:s.period.number||null,label:s.period.label||attachMonthLabel(s.period.key)},updatedAt:new Date().toISOString(),dt:'__finance_summary__'};}
+async function publishFinanceSummary(){if(!isConfigured()||!canAccessFinance())return;const next=financeSummaryPayload(),cur=db?.__finance_summary__;if(!next){if(cur)await syncDel('__finance_summary__');return;}if(cur&&cur.taux===next.taux&&cur.period?.key===next.period.key)return;await syncSave('__finance_summary__',next);}
 
 // La mobilisation est lue dans l'attachement et reste extérieure à l'indice physique.
 // Dispersion 1B conserve provisoirement la valeur historique demandée par le chef de projet.
@@ -3490,7 +3497,7 @@ async function saveAttachLedger(){
   const rows=Object.values(ATTACH_XLS.periods||{}).map(p=>({project_id:ACTIVE_PROJECT_ID,period:p.key,number:p.number||null,status:p.status==='validated'?'validated':'draft',ledger:{...p,_updated:undefined},validated_by:p.status==='validated'?SESSION.user.id:null,validated_at:p.status==='validated'?new Date().toISOString():null}));
   if(!rows.length)return;
   const {error}=await sb.from('attachment_periods').upsert(rows,{onConflict:'project_id,period,status'});
-  if(error)toast('Attachement non enregistré : '+error.message);
+  if(error)toast('Attachement non enregistré : '+error.message);else await publishFinanceSummary();
 }
 function activeAttachPeriod(){return ATTACH_XLS.periods[ATTACH_XLS.selected]||ATTACH_XLS.periods['2026-08']||null;}
 function attachMonthLabel(key){const [y,m]=key.split('-').map(Number);return new Date(Date.UTC(y,m-1,1)).toLocaleDateString('fr-FR',{month:'long',year:'numeric',timeZone:'UTC'}).replace(/^./,c=>c.toUpperCase());}
@@ -3632,7 +3639,7 @@ window.createNextContractAttachment=createNextContractAttachment;window.selectCo
 function contractAttachmentHeader(period,suffix=''){return`A T T A C H E M E N T  N° ${String(period.number).padStart(2,'0')} - ${period.key.slice(5)}/${period.key.slice(2,4)} : DU 01/${period.key.slice(5)}/${period.key.slice(0,4)} AU ${period.cutoff.split('-').reverse().join('/')}${suffix}`;}
 function contractRecapRows(period){
   const base=ATTACHMENT_REFERENCE.lots.map(r=>({r,f:xlsLotFinancial(period,r)})),sum=(kind,key)=>base.reduce((a,x)=>a+(kind==='base'?x.f[`base${key}`]:x.f[`amend${key}`]),0),blank=()=>Array(10).fill(null),rows=Array.from({length:43},blank);
-  rows[0][0]=contractAttachmentHeader(period);rows[1][0]='OBJET DES TRAVAUX : REALISATION DE TRANCHEE ET POSE DE TUYAUTERIE DISTRIBUTION PHASE 1B';rows[2][0]='ENTREPRISE : SUD SUD BTP - SIYO LIMITED';rows[3][0]='ATTACHEMENT RECAPITULATIF';
+  rows[0][0]=contractAttachmentHeader(period);rows[1][0]='OBJET DES TRAVAUX : '+(PROJECT_CONFIG.identity?.name||'');rows[2][0]='ENTREPRISE : '+(PROJECT_CONFIG.identity?.company||'SIYO LIMITED');rows[3][0]='ATTACHEMENT RECAPITULATIF';
   rows[4]=['N°','DESIGNATION','MARCHE',null,null,null,'Précédemment Facturé','Mois','Cumulés','%'];rows[5]=[null,null,'UNITE','QUANTITE','PRIX UNITAIRE','PRIX TOTAL',null,null,null,'%'];
   base.forEach(({r,f},i)=>{rows[6+i]=[r.no,`LOT ${r.no} ${(LOC.find(l=>l.id===r.id)?.nm||r.id).toUpperCase()} = ${fmt(r.market)} m`,'U',1,f.baseMarket,f.baseMarket,f.basePrevious,f.baseMonth,f.baseCumulative,f.baseMarket?f.baseCumulative/f.baseMarket:0];});
   const bm=sum('base','Market'),bp=sum('base','Previous'),bmo=sum('base','Month'),bc=sum('base','Cumulative');rows[16]=['MONTANT MARCHE DE BASE HT',null,null,null,null,bm,bp,bmo,bc,null];rows[17]=['REMISE 15% (MARCHE DE BASE)',null,null,null,null,bm*.15,bp*.15,bmo*.15,bc*.15,null];rows[18]=['TOTAL APRES REMISE MARCHE DE BASE',null,null,null,null,bm*.85,bp*.85,bmo*.85,bc*.85,null];
@@ -3694,7 +3701,7 @@ async function exportContractAttachmentExcel(){
     for(let c=6;c<=9;c++){const L=String.fromCharCode(64+c);setExcelFormula(recap.getCell(18,c),`${L}17*15%`,recapRows[17][c-1]);setExcelFormula(recap.getCell(19,c),`${L}17-${L}18`,recapRows[18][c-1]);setExcelFormula(recap.getCell(36,c),`${L}35*15%`,recapRows[35][c-1]);setExcelFormula(recap.getCell(37,c),`${L}35-${L}36`,recapRows[36][c-1]);setExcelFormula(recap.getCell(41,c),`${L}19+${L}37`,recapRows[40][c-1]);setExcelFormula(recap.getCell(42,c),`${L}41*5%`,recapRows[41][c-1]);setExcelFormula(recap.getCell(43,c),`${L}41-${L}42`,recapRows[42][c-1]);}
     setExcelFormula(recap.getCell(43,10),'IFERROR(I43/F43,0)',recapRows[42][9]);if(recap.rowCount>43)recap.spliceRows(44,recap.rowCount-43);recap.pageSetup.printArea='A1:J43';
     ATTACHMENT_REFERENCE.lots.forEach(ref=>{
-      const id=ref.id,last=xlsLastDisplayRow(id),rows=Array.from({length:last},()=>Array(12).fill(null));xlsRows(id).filter(r=>r.r<=last).forEach(r=>{rows[r.r-1]=[...r.c];while(rows[r.r-1].length<12)rows[r.r-1].push(null);});rows[0][0]=contractAttachmentHeader(period);rows[1][0]=`OBJET DES TRAVAUX : REALISATION DE TRANCHEE ET POSE DE TUYAUTERIE DISTRIBUTION PHASE 1B - ${(LOC.find(l=>l.id===id)?.nm||id).toUpperCase()}`;rows[2][0]=`ENTREPRISE : ${PROJECT_CONFIG.identity?.company||'SUD SUD BTP - SIYO LIMITED'}`;const memo=new Map();xlsRows(id).filter(r=>r.r>=7&&r.r<=last).forEach(r=>{rows[r.r-1]=xlsLineValues(period,id,r.r,memo);});
+      const id=ref.id,last=xlsLastDisplayRow(id),rows=Array.from({length:last},()=>Array(12).fill(null));xlsRows(id).filter(r=>r.r<=last).forEach(r=>{rows[r.r-1]=[...r.c];while(rows[r.r-1].length<12)rows[r.r-1].push(null);});rows[0][0]=contractAttachmentHeader(period);rows[1][0]=`OBJET DES TRAVAUX : REALISATION DE TRANCHEE ET POSE DE TUYAUTERIE DISTRIBUTION PHASE 1B - ${(LOC.find(l=>l.id===id)?.nm||id).toUpperCase()}`;rows[2][0]=`ENTREPRISE : ${PROJECT_CONFIG.identity?.company||'SIYO LIMITED'}`;const memo=new Map();xlsRows(id).filter(r=>r.r>=7&&r.r<=last).forEach(r=>{rows[r.r-1]=xlsLineValues(period,id,r.r,memo);});
       const ws=wb.getWorksheet(ATTACH_EXCEL_LOTS[id].sheet);writeValues(ws,rows);
       xlsRows(id).filter(r=>r.r>=7&&r.r<=last).forEach(r=>{const leaf=xlsIsLeaf(id,r),grillage=xlsIsGrillageRow(r),manual=!!period.manual?.[attachRowKey(id,r.r)]&&!grillage;for(let c=2;c<12;c++){let formula=xlsFormula(id,r.r,c);if(leaf&&c===6)formula=`=H${r.r}-F${r.r}`;if(grillage&&c===7){const poseRows=xlsConduitPoseRows(id).map(x=>`H${x.r}`);formula=poseRows.length?`=${poseRows.join('+')}`:'=0';}if(leaf&&c===9)formula=`=G${r.r}*D${r.r}`;if(leaf&&c===10)formula=`=H${r.r}*D${r.r}`;if(leaf&&c===11)formula=`=IFERROR(K${r.r}/E${r.r},0)`;if(c===7&&manual)formula='';if(formula)setExcelFormula(ws.getCell(r.r,c+1),formula,rows[r.r-1][c]);}if(manual){ws.getCell(r.r,8).value=rows[r.r-1][7];ws.getCell(r.r,8).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFE699'}};ws.getCell(r.r,8).note='Cumul ajusté manuellement pour validation';}if(grillage)ws.getCell(r.r,8).note='Somme automatique des cumuls de conduites posées par DN';});
       if(ws.rowCount>last)ws.spliceRows(last+1,ws.rowCount-last);ws.pageSetup.printArea=`A1:L${last}`;
@@ -3752,7 +3759,7 @@ function pgAttachement(){
     let h=`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Référentiel construit depuis le DQE validé</div></div><div class="xls-app-actions no-print"><select class="fi" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number).padStart(2,'0')} — ${x.label} · ${x.status==='validated'?'Validé':'Brouillon'}</option>`).join('')}</select><button class="bt" onclick="exportContractAttachmentExcel()">📊 Export Excel</button><button class="bt" onclick="printContractAttachment()">🖨 Imprimer</button>${p.status==='validated'?'<button class="bp" onclick="createNextContractAttachment()">+ Créer l’attachement du mois</button>':''}<button class="bp" onclick="beginContractAdjustment()">✎ Ajustement pour validation</button>${p.status==='draft'?'<button class="bt xls-validate" onclick="validateContractAttachment()">Valider l’attachement</button>':''}</div></div><div class="xls-document-head"><b>${contractAttachmentHeader(p)}</b><span>PROJET : ${escHtml(projectName().toUpperCase())}</span><span>ENTREPRISE : ${escHtml(PROJECT_CONFIG.identity?.company||'SIYO LIMITED')}</span></div>${renderGenericAttachment(p)}<div class="attach-disclaimer">${p.status==='validated'?'Situation validée et verrouillée.':'Brouillon local : les cumuls ajustés ne modifient pas les rapports terrain.'}</div></div>`;return h;
   }
   const adjustLot=ATTACH_XLS_LEVEL==='lot'?ATTACH_XLS_LOT:'oume';
-  let h=`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Reproduction de la structure du classeur validé</div></div><div class="xls-app-actions no-print"><select class="fi" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number).padStart(2,'0')} — ${x.label} · ${x.status==='validated'?'Validé':'Brouillon'}</option>`).join('')}</select><button class="bt" onclick="exportContractAttachmentExcel()">📊 Export Excel</button><button class="bt" onclick="printContractAttachment()">🖨 Imprimer</button>${p.status==='validated'?'<button class="bp" onclick="createNextContractAttachment()">+ Créer l’attachement du mois</button>':''}<button class="bp" onclick="beginContractAdjustment('${adjustLot}')">✎ Ajustement pour validation</button>${p.status==='draft'?'<button class="bt xls-validate" onclick="validateContractAttachment()">Valider l’attachement</button>':''}</div></div><div class="xls-document-head"><b>${contractAttachmentHeader(p)}</b><span>OBJET DES TRAVAUX : RÉALISATION DE TRANCHÉE ET POSE DE TUYAUTERIE DISTRIBUTION PHASE 1B${ATTACH_XLS_LEVEL==='lot'?` - ${(LOC.find(l=>l.id===ATTACH_XLS_LOT)?.nm||'').toUpperCase()}`:''}</span><span>ENTREPRISE : SUD SUD BTP - SIYO LIMITED</span></div>`;
+  let h=`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Reproduction de la structure du classeur validé</div></div><div class="xls-app-actions no-print"><select class="fi" onchange="selectContractAttachment(this.value)">${periods.map(x=>`<option value="${x.key}" ${x.key===p.key?'selected':''}>N°${String(x.number).padStart(2,'0')} — ${x.label} · ${x.status==='validated'?'Validé':'Brouillon'}</option>`).join('')}</select><button class="bt" onclick="exportContractAttachmentExcel()">📊 Export Excel</button><button class="bt" onclick="printContractAttachment()">🖨 Imprimer</button>${p.status==='validated'?'<button class="bp" onclick="createNextContractAttachment()">+ Créer l’attachement du mois</button>':''}<button class="bp" onclick="beginContractAdjustment('${adjustLot}')">✎ Ajustement pour validation</button>${p.status==='draft'?'<button class="bt xls-validate" onclick="validateContractAttachment()">Valider l’attachement</button>':''}</div></div><div class="xls-document-head"><b>${contractAttachmentHeader(p)}</b><span>OBJET DES TRAVAUX : RÉALISATION DE TRANCHÉE ET POSE DE TUYAUTERIE DISTRIBUTION PHASE 1B${ATTACH_XLS_LEVEL==='lot'?` - ${(LOC.find(l=>l.id===ATTACH_XLS_LOT)?.nm||'').toUpperCase()}`:''}</span><span>ENTREPRISE : ${escHtml(PROJECT_CONFIG.identity?.company||'SIYO LIMITED')}</span></div>`;
   h+=ATTACH_XLS_LEVEL==='recap'?renderContractRecap(p):renderContractLot(p,ATTACH_XLS_LOT);
   return h+`<div class="attach-disclaimer">${p.status==='validated'?'Situation validée et verrouillée.':'Brouillon enregistré localement. Les valeurs ajustées ne remplacent pas les données de la fenêtre Saisie.'}</div></div>`;
 }
