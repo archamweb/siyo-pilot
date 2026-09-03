@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SIYO Pilot</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--ink:#0f1b2d;--blue:#2c7be5;--muted:#5a6778;--faint:#8a95a5;--rule:#dfe4ec;--panel:#f4f6fa;--ok:#36b37e;--warn:#f5a623;--bad:#e74c3c}
+*{box-sizing:border-box}
+body{margin:0;font-family:'DM Sans',system-ui,sans-serif;color:var(--ink);background:#fff;line-height:1.45}
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--rule)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.05rem}
+.brand i{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:8px;background:var(--ink);color:#fff;font-style:normal;font-size:.85rem;letter-spacing:.02em}
+.who{display:flex;align-items:center;gap:12px;font-size:.9rem;color:var(--muted)}
+.role{padding:3px 9px;border-radius:999px;font-size:.78rem;font-weight:700;background:var(--panel);color:var(--ink)}
+.role.direction{background:var(--ink);color:#fff}.role.visiteur{background:#fff3e0;color:#9a5b00}.role.admin{background:#e8f1fd;color:#1b4f9c}
+main{max-width:1000px;margin:0 auto;padding:36px 24px 80px}
+h1{font-size:1.5rem;margin:0 0 4px}
+.lede{color:var(--muted);margin:0 0 28px}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--rule);background:#fff;color:var(--ink);padding:9px 14px;font-weight:500}
+button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+button.ghost{border-color:transparent;color:var(--muted)}
+button:disabled{opacity:.5;cursor:default}
+input,select{font:inherit;width:100%;padding:10px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff}
+label{display:block;font-size:.85rem;color:var(--muted);margin:14px 0 6px}
+.card{border:1px solid var(--rule);border-radius:12px;padding:18px 20px;background:#fff}
+.login{max-width:380px;margin:60px auto}
+.msg{margin-top:12px;font-size:.9rem;color:var(--bad);min-height:1.2em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.proj h3{margin:0 0 4px;font-size:1.05rem}
+.proj .sub{color:var(--muted);font-size:.88rem;margin-bottom:12px}
+.status{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.76rem;font-weight:700;margin-right:6px}
+.status.active{background:#e6f7ef;color:#1a7f4b}.status.preparation{background:#eef2ff;color:#4a4ab8}.status.suspended{background:#fff3e0;color:#9a5b00}
+.status.works_completed,.status.closed{background:#e8f1fd;color:#1b4f9c}.status.archived,.status.abandoned{background:var(--panel);color:var(--faint)}
+.kv{display:flex;gap:18px;font-size:.88rem;color:var(--muted);margin:10px 0 14px}
+.kv b{color:var(--ink);font-weight:700}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px;flex-wrap:wrap}
+.banner{padding:10px 14px;border-radius:8px;background:#fff3e0;color:#9a5b00;font-size:.9rem;margin-bottom:18px}
+.test{margin-top:28px}
+.test h2{font-size:1.05rem;margin:0 0 10px}
+.test ul{list-style:none;padding:0;margin:0;font-size:.9rem}
+.test li{padding:8px 0;border-bottom:1px solid var(--rule);display:flex;gap:10px}
+.test li::before{content:"○";color:var(--faint)}
+.test li.ok::before{content:"✓";color:var(--ok)}
+.test li.ko::before{content:"✗";color:var(--bad)}
+dialog{border:0;border-radius:14px;padding:24px;max-width:460px;width:92%;box-shadow:0 20px 60px rgba(15,27,45,.25)}
+dialog::backdrop{background:rgba(15,27,45,.45)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><i>SP</i>SIYO Pilot</div>
+  <div class="who" id="who"></div>
+</header>
+<main id="app"></main>
+
+<dialog id="dlg">
+  <h2 style="margin:0 0 6px">Nouveau projet</h2>
+  <p class="lede" style="margin-bottom:0">Identité seulement. Le paramétrage contractuel (DQE, zones, DN) se fait ensuite dans le projet.</p>
+  <label>Nom du projet</label><input id="np-name" placeholder="AEP … — Dispersion Azaguié">
+  <label>Nom court</label><input id="np-short" placeholder="Azaguié">
+  <label>Client</label><input id="np-client">
+  <label>Maître d'œuvre</label><input id="np-moe">
+  <label>Statut</label>
+  <select id="np-status"><option value="preparation">En préparation</option><option value="active">En cours</option></select>
+  <div class="msg" id="np-msg"></div>
+  <div class="actions" style="justify-content:flex-end;margin-top:14px">
+    <button onclick="dlg.close()">Annuler</button>
+    <button class="primary" onclick="createProject()">Créer le projet</button>
+  </div>
+</dialog>
+
+<script>
+// ─── Configuration : à remplir par le DP, jamais la clé service_role ───────────
+const SUPABASE_URL = 'https://hqehisgtcymuskzdzgzj.supabase.co';          // ex. https://xxxx.supabase.co
+const SUPABASE_ANON_KEY = 'sb_publishable_alOK19G7yTtpuFnuYkiWJw_Ci10-p-u';   // clé anon / publishable uniquement
+// ──────────────────────────────────────────────────────────────────────────────
+
+const STATUS = {preparation:'En préparation',active:'En cours',suspended:'En suspens',works_completed:'Travaux terminés',closed:'Projet achevé',abandoned:'Abandonné',archived:'Archivé'};
+const ROLE = {direction:'Direction de projet',chef_projet:'Chef de projet',agent:'Agent de saisie',lecteur:'Lecteur',visiteur:'Visiteur'};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let sb, me = null, profile = null;
+const app = document.getElementById('app'), who = document.getElementById('who'), dlg = document.getElementById('dlg');
+
+function configured(){ return SUPABASE_URL.startsWith('https://') && !SUPABASE_ANON_KEY.startsWith('REMPLACER'); }
+
+async function init(){
+  if(!configured()){
+    app.innerHTML = `<div class="card login"><h1>Configuration requise</h1><p class="lede">Renseigne <code>SUPABASE_URL</code> et <code>SUPABASE_ANON_KEY</code> en tête du script, puis recharge la page.</p></div>`;
+    return;
+  }
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data:{ session } } = await sb.auth.getSession();
+  if(session){ me = session.user; await afterLogin(); } else renderLogin();
+  sb.auth.onAuthStateChange((ev, s) => { if(ev === 'SIGNED_OUT'){ me = null; profile = null; renderLogin(); } });
+}
+
+function renderLogin(msg=''){
+  who.innerHTML = '';
+  app.innerHTML = `
+    <div class="card login">
+      <h1>Connexion</h1>
+      <p class="lede">Accès sur invitation. Les comptes sont créés par la direction SIYO.</p>
+      <label>Adresse e-mail</label><input id="em" type="email" autocomplete="username">
+      <label>Mot de passe</label><input id="pw" type="password" autocomplete="current-password">
+      <div class="msg" id="lmsg">${esc(msg)}</div>
+      <button class="primary" style="width:100%;margin-top:6px" onclick="login()">Se connecter</button>
+    </div>`;
+  document.getElementById('pw').addEventListener('keydown', e => { if(e.key === 'Enter') login(); });
+}
+
+async function login(){
+  const email = document.getElementById('em').value.trim(), password = document.getElementById('pw').value;
+  const btn = document.querySelector('.login button'); btn.disabled = true;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if(error){ btn.disabled = false; document.getElementById('lmsg').textContent = 'Identifiants refusés ou compte non autorisé.'; return; }
+  me = data.user; await afterLogin();
+}
+
+async function logout(){ await sb.auth.signOut(); }
+
+async function afterLogin(){
+  const { data:p } = await sb.from('profiles').select('id,full_name,email,is_admin').eq('id', me.id).single();
+  profile = p || { email: me.email, is_admin:false };
+  who.innerHTML = `<span>${esc(profile.full_name || profile.email)}</span>${profile.is_admin ? '<span class="role admin">Administrateur SIYO</span>' : ''}<button class="ghost" onclick="logout()">Déconnexion</button>`;
+  await renderProjects();
+}
+
+async function renderProjects(){
+  app.innerHTML = `<div class="toolbar"><div><h1>Projets</h1><p class="lede" style="margin:0">Seuls les projets auxquels tu es affecté apparaissent.</p></div>
+    ${profile.is_admin ? '<button class="primary" onclick="dlg.showModal()">Créer un projet</button>' : ''}</div><div class="grid" id="grid">Chargement…</div>`;
+
+  // Affectations de l'utilisateur, avec le projet lié
+  const { data:members, error } = await sb.from('project_members').select('role, projects(id,code,name,short_name,client,moe,status,is_demo)').eq('user_id', me.id);
+  if(error){ document.getElementById('grid').innerHTML = `<div class="msg">Lecture impossible : ${esc(error.message)}</div>`; return; }
+  const rows = (members || []).filter(m => m.projects).map(m => ({ ...m.projects, role: m.role }));
+  // L'administrateur voit aussi les projets où il n'est pas affecté
+  if(profile.is_admin){
+    const { data:all } = await sb.from('projects').select('id,code,name,short_name,client,moe,status,is_demo');
+    (all || []).forEach(p => { if(!rows.some(r => r.id === p.id)) rows.push({ ...p, role:null }); });
+  }
+  if(!rows.length){ document.getElementById('grid').innerHTML = `<div class="card">Aucun projet affecté à ce compte. Demande une affectation à la direction SIYO.</div>`; return; }
+
+  const grid = document.getElementById('grid'); grid.innerHTML = '';
+  for(const p of rows){
+    const el = document.createElement('div'); el.className = 'card proj';
+    el.innerHTML = `<h3>${esc(p.name)}</h3><div class="sub">${esc(p.client || '—')} · MOE ${esc(p.moe || '—')}</div>
+      <span class="status ${esc(p.status)}">${STATUS[p.status] || esc(p.status)}</span>${p.is_demo ? '<span class="status archived">Démo</span>' : ''}
+      <span class="role ${esc(p.role || 'admin')}">${p.role ? ROLE[p.role] : 'Admin, sans affectation'}</span>
+      <div class="kv" id="kv-${p.id}"><span>Rapports : <b>…</b></span></div>
+      <div class="actions"><button class="primary" onclick="openProject('${p.id}')">Ouvrir</button></div>`;
+    grid.appendChild(el);
+    summary(p.id);
+  }
+}
+
+async function summary(id){
+  const { count } = await sb.from('daily_reports').select('report_date', { count:'exact', head:true }).eq('project_id', id);
+  const { data:last } = await sb.from('daily_reports').select('report_date').eq('project_id', id).order('report_date', { ascending:false }).limit(1);
+  const kv = document.getElementById('kv-' + id);
+  if(kv) kv.innerHTML = `<span>Rapports : <b>${count ?? 0}</b></span><span>Dernière saisie : <b>${last?.[0]?.report_date ? new Date(last[0].report_date).toLocaleDateString('fr-FR') : '—'}</b></span>`;
+}
+
+async function openProject(id){
+  const { data:p } = await sb.from('projects').select('*').eq('id', id).single();
+  const { data:m } = await sb.from('project_members').select('role').eq('project_id', id).eq('user_id', me.id).maybeSingle();
+  const role = m?.role || (profile.is_admin ? 'admin' : null);
+  const readOnly = !['direction','chef_projet','agent','admin'].includes(role);
+  app.innerHTML = `
+    <button class="ghost" onclick="renderProjects()">← Tous les projets</button>
+    <h1 style="margin-top:12px">${esc(p.name)}</h1>
+    <p class="lede"><span class="status ${esc(p.status)}">${STATUS[p.status]}</span> Rôle sur ce projet : <span class="role ${esc(role)}">${ROLE[role] || 'Administrateur'}</span></p>
+    ${readOnly ? '<div class="banner">Lecture seule — ce compte ne peut ni saisir ni consulter les données financières.</div>' : ''}
+    <div class="card"><div class="kv" id="kv-${p.id}"><span>Rapports : <b>…</b></span></div>
+      <p style="margin:0;color:var(--muted);font-size:.9rem">Tableau de bord, saisie, contraintes et attachement seront branchés ici sur la base centrale (prochaine étape : import des rapports Dispersion 1B et couche d'adaptation V1.5).</p></div>
+    <section class="test card"><h2>Contrôle des droits</h2>
+      <p style="margin:0 0 10px;color:var(--muted);font-size:.9rem">Vérifie ce que la base autorise réellement pour ce compte — pas ce que l'écran affiche.</p>
+      <ul id="tests"><li>Lecture des rapports du projet</li><li>Lecture des attachements (finance)</li><li>Écriture d'un rapport</li></ul>
+      <div class="actions" style="margin-top:12px"><button onclick="runTests('${p.id}','${esc(role)}')">Lancer le contrôle</button></div>
+    </section>`;
+  summary(p.id);
+}
+
+async function runTests(id, role){
+  const li = document.querySelectorAll('#tests li'); li.forEach(l => l.className = '');
+  const set = (i, ok, txt) => { li[i].className = ok ? 'ok' : 'ko'; li[i].textContent = txt; };
+  const canWrite = ['direction','chef_projet','agent','admin'].includes(role);
+  const canFinance = ['direction','admin'].includes(role);
+
+  const r1 = await sb.from('daily_reports').select('report_date', { count:'exact', head:true }).eq('project_id', id);
+  set(0, !r1.error, r1.error ? 'Lecture des rapports refusée : ' + r1.error.message : `Lecture des rapports : autorisée (${r1.count ?? 0} lignes visibles)`);
+
+  const r2 = await sb.from('attachment_periods').select('id', { count:'exact', head:true }).eq('project_id', id);
+  const financeVisible = !r2.error && (r2.count ?? 0) >= 0 && canFinance;
+  set(1, canFinance ? !r2.error : (r2.count ?? 0) === 0,
+      canFinance ? `Attachements : lecture autorisée (${r2.count ?? 0} période(s))` : `Attachements : ${(r2.count ?? 0) === 0 ? 'aucune ligne renvoyée — la base filtre correctement' : 'ANOMALIE : des lignes sont visibles'}`);
+
+  const r3 = await sb.from('daily_reports').insert({ project_id:id, report_date:'1900-01-01', payload:{ test:true } });
+  if(canWrite){
+    set(2, !r3.error, r3.error ? 'Écriture refusée alors que le rôle l\u2019autorise : ' + r3.error.message : 'Écriture autorisée (ligne de test créée puis supprimée)');
+    if(!r3.error) await sb.from('daily_reports').delete().eq('project_id', id).eq('report_date', '1900-01-01');
+  } else {
+    set(2, !!r3.error, r3.error ? 'Écriture refusée par la base — conforme au rôle' : 'ANOMALIE : l\u2019écriture a été acceptée');
+    if(!r3.error) await sb.from('daily_reports').delete().eq('project_id', id).eq('report_date', '1900-01-01');
+  }
+}
+
+async function createProject(){
+  const name = document.getElementById('np-name').value.trim(), short = document.getElementById('np-short').value.trim();
+  const msg = document.getElementById('np-msg'); msg.textContent = '';
+  if(!name){ msg.textContent = 'Le nom est obligatoire.'; return; }
+  const code = (short || name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') + '-' + Date.now().toString(36).slice(-4);
+  const { data:p, error } = await sb.from('projects').insert({ code, name, short_name: short || null, client: document.getElementById('np-client').value.trim() || null,
+    moe: document.getElementById('np-moe').value.trim() || null, status: document.getElementById('np-status').value, created_by: me.id }).select().single();
+  if(error){ msg.textContent = 'Création refusée : ' + error.message; return; }
+  const { error:e2 } = await sb.from('project_members').insert({ project_id:p.id, user_id:me.id, role:'direction', granted_by:me.id });
+  if(e2){ msg.textContent = 'Projet créé mais affectation refusée : ' + e2.message; return; }
+  await sb.from('audit_events').insert({ project_id:p.id, actor_id:me.id, action:'project.create', target:p.code, after:{ name, status:p.status } });
+  dlg.close(); ['np-name','np-short','np-client','np-moe'].forEach(i => document.getElementById(i).value = '');
+  await renderProjects();
+}
+
+init();
+</script>
+</body>
+</html>
