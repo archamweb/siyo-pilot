@@ -12,6 +12,99 @@
 <body>
 <div id="app"></div>
 <script>
+// Module materiaux integre depuis la PR #1, commit 8def56c.
+// Versioned opt-in: old project configurations retain the original PEHD calculation.
+function materialTracking(cfg=PROJECT_CONFIG){return cfg?.materialTracking===1;}
+function zoneMaterial(zone){return zone?.material==='PVC'?'PVC':'PEHD';}
+function weldedZone(zone){return zoneMaterial(zone)==='PEHD';}
+function pehdLength(locs=LOC){return locs.reduce((sum,l)=>sum+l.zones.filter(weldedZone).reduce((n,z)=>n+Object.values(z.dn).reduce((a,b)=>a+(+b||0),0),0),0);}
+function weldingVisible(locs=LOC){return !materialTracking()||pehdLength(locs)>0;}
+function continuityVisible(){return !materialTracking();}
+function zoneCaption(z){return (z.nm||z.zid)+(materialTracking()?' · '+zoneMaterial(z):'');}
+function pipeLabel(key){const parts=String(key).split(':');return parts.length>1?parts[0]+' DN '+parts[1]:'DN '+key;}
+function pipeNumber(key){return String(key).split(':').at(-1);}
+function pipeDailyKey(z,dn){return materialTracking()?zoneMaterial(z)+':'+dn:String(dn);}
+function physicalWeightsFor(material,base){const w={...base};if(material==='PVC'){w.fermeture=(+w.fermeture||0)+(+w.assemblage||0);w.assemblage=0;}return w;}
+function materialSummary(locs,cu,base=PHYSICAL_WEIGHTS){
+  const totals={bar:0,soud:0,fou:0,rem:0,ess:0},byMaterial={PEHD:{planned:0,s:0,r:0},PVC:{planned:0,s:0,r:0}};
+  let tP=0,topoLength=0,gcDone=0,gcProgressTotal=0,gcTotal=0,rdLength=0,recolementDone=0,recolementLength=0;
+  const cap=(v,p)=>Math.min(Math.max(Number(v)||0,0),p);
+  for(const l of locs){
+    const c=cu[l.id]||{};tP+=l.tot;topoLength+=cap(c.imp,1)*l.tot;
+    gcTotal+=l.regards||0;gcDone+=cap(c.gc,l.regards||0);gcProgressTotal+=cap(c.gcProgress,l.regards||0);
+    if(c.rincageStatus==='valide')rdLength+=l.tot;
+    if(c.recolementStatus==='valide'||+c.rec>=1){recolementDone++;recolementLength+=l.tot;}
+    for(const z of l.zones)for(const [dn,p] of Object.entries(z.dn)){
+      const prev=+p||0,d=c.zones?.[z.zid]?.dn?.[dn]||{},m=byMaterial[zoneMaterial(z)];
+      m.planned+=prev;m.r+=cap(d.r,prev);
+      if(weldedZone(z)){m.s+=cap(d.s,prev);totals.soud+=cap(d.s,prev);}
+      totals.bar+=cap(d.bar,prev);totals.fou+=cap(d.f,prev);totals.rem+=cap(d.r,prev);totals.ess+=cap(d.ess,prev);
+    }
+  }
+  const pct=v=>tP?v/tP*100:0;
+  const rates={topographie:pct(topoLength),bardage:pct(totals.bar),assemblage:byMaterial.PEHD.planned?totals.soud/byMaterial.PEHD.planned*100:0,ouverture:pct(totals.fou),fermeture:pct(totals.rem),gc:gcTotal?gcProgressTotal/gcTotal*100:0,essais:pct(totals.ess),rincage:pct(rdLength),recolement:locs.length?recolementDone/locs.length*100:0};
+  const common=['topographie','bardage','ouverture','essais','rincage'];
+  let points=common.reduce((s,k)=>s+(+base[k]||0)*rates[k]/100,0);
+  if(tP)points+=((+base.assemblage||0)*byMaterial.PEHD.s+(+base.fermeture||0)*byMaterial.PEHD.r+((+base.assemblage||0)+(+base.fermeture||0))*byMaterial.PVC.r)/tP;
+  if(gcTotal)points+=(+base.gc||0)*rates.gc/100;
+  const applicableKeys=Object.keys(base).filter(k=>k!=='gc'||gcTotal>0),weight=applicableKeys.reduce((s,k)=>s+(+base[k]||0),0);
+  return{tP,totals,byMaterial,pehdPlanned:byMaterial.PEHD.planned,topoLength,gcDone,gcProgressTotal,gcTotal,rdLength,recolementDone,recolementLength,rates,index:weight?points/weight*100:0,applicableKeys:applicableKeys.filter(k=>k!=='assemblage'||byMaterial.PEHD.planned>0)};
+}
+function projectDraftMaterial(id,zoneIndex,value){
+  if(!PARAM_DRAFT||!['PEHD','PVC'].includes(value))return;
+  const z=PARAM_DRAFT.localities.find(l=>l.id===id)?.zones[zoneIndex];if(!z)return;
+  if(zoneHasHistory(id,z.zid)){alert('Le matériau de cette portion possède un historique. Il ne peut pas être réinterprété.');draw();return;}
+  if(!materialTracking(PARAM_DRAFT)&&dbDates().length){alert('L’activation sur un projet historique nécessite une migration vérifiée. Le calcul existant est conservé.');draw();return;}
+  PARAM_DRAFT.materialTracking=1;
+  PARAM_DRAFT.localities.forEach(l=>l.zones.forEach(zone=>{if(!zone.material)zone.material='PEHD';}));
+  z.material=value;saveProjectDraft();draw();
+}
+function renderMaterialSelector(loc,z,zi){
+  const locked=zoneHasHistory(loc.id,z.zid),cfg=activeProjectParamConfig();
+  if(!PARAM_DRAFT)return `<span class="material-tag">${materialTracking(cfg)?zoneMaterial(z):'PEHD · historique'}</span>`;
+  return `<label class="material-selector">Matériau <select class="fi" aria-label="Matériau du sous-tronçon" ${locked?'disabled':''} onchange="projectDraftMaterial('${loc.id}',${zi},this.value)">${!materialTracking(cfg)?'<option value="" selected>PEHD · historique</option>':''}<option value="PEHD" ${materialTracking(cfg)&&zoneMaterial(z)==='PEHD'?'selected':''}>PEHD</option><option value="PVC" ${z.material==='PVC'?'selected':''}>PVC</option></select></label>`;
+}
+function materialReportRows(rp,locs){
+  return locs.flatMap(l=>l.zones.flatMap(z=>Object.keys(z.dn).map(dn=>({l,z,dn,d:rp?.loc?.[l.id]?.zones?.[z.zid]?.[dn]||{}}))));
+}
+function renderMaterialDaily(zone,locs,rp){
+  const weld=weldingVisible(locs),rows=materialReportRows(rp,locs).filter(x=>['s','f','r','ess'].some(k=>(k!=='s'||weldedZone(x.z))&&+x.d[k]));
+  let h=`<div class="cd"><div class="ct">Activités du jour — ${escHtml(zone)}</div><div style="overflow-x:auto"><table class="tb"><thead><tr><th>Front</th><th>Sous-tronçon</th><th>Conduite</th>${weld?'<th>Soudure PEHD</th>':''}<th>Fouille</th><th>Pose</th><th>Essai</th></tr></thead><tbody>`;
+  for(const {l,z,dn,d} of rows)h+=`<tr><td>${escHtml(l.nm)}</td><td>${escHtml(z.nm)}</td><td>${zoneMaterial(z)} DN ${dn}</td>${weld?`<td>${weldedZone(z)?fmt(+d.s||0):'N/A'}</td>`:''}<td>${fmt(+d.f||0)}</td><td>${fmt(+d.r||0)}</td><td>${fmt(+d.ess||0)}</td></tr>`;
+  h+='</tbody></table></div>';
+  if(!rows.length)h+='<p>Aucune production linéaire renseignée ce jour.</p>';
+  for(const l of locs){const p=rp?.loc?.[l.id]?.p;if(p)h+=`<p><b>${escHtml(l.nm)} — pièces et raccords :</b> ${escHtml(p)}</p>`;}
+  return h+'</div>';
+}
+function renderMaterialCumulative(zone,locs,cu){
+  const weld=weldingVisible(locs),s=materialSummary(locs,cu),cell=(v,p)=>`${fmt(v)} ml · ${pc(v,p).toFixed(1)} %`;
+  let h=`<div class="cd"><div class="ct">Cumul — ${escHtml(zone)}</div><div style="overflow-x:auto"><table class="tb"><thead><tr><th>Front / portion</th><th>Prévu</th>${weld?'<th>Soudure PEHD</th>':''}<th>Fouille</th><th>Pose</th><th>Essais</th></tr></thead><tbody>`;
+  for(const l of locs){
+    const ls=materialSummary([l],cu);h+=`<tr><td><b>${escHtml(l.nm)}</b></td><td>${fmt(l.tot)}</td>${weld?`<td>${ls.pehdPlanned?cell(ls.totals.soud,ls.pehdPlanned):'N/A'}</td>`:''}<td>${cell(ls.totals.fou,l.tot)}</td><td>${cell(ls.totals.rem,l.tot)}</td><td>${cell(ls.totals.ess,l.tot)}</td></tr>`;
+    if(REPORT_SHOW_TECHNICAL)for(const z of l.zones)for(const [dn,p] of Object.entries(z.dn)){
+      const d=cu[l.id]?.zones?.[z.zid]?.dn?.[dn]||{};
+      h+=`<tr><td>${escHtml(zoneCaption(z))} · DN ${dn}</td><td>${fmt(p)}</td>${weld?`<td>${weldedZone(z)?cell(+d.s||0,p):'N/A'}</td>`:''}<td>${cell(+d.f||0,p)}</td><td>${cell(+d.r||0,p)}</td><td>${cell(+d.ess||0,p)}</td></tr>`;
+    }
+  }
+  return h+`<tr><td><b>Total retenu</b></td><td>${fmt(s.tP)}</td>${weld?`<td>${cell(s.totals.soud,s.pehdPlanned)}</td>`:''}<td>${cell(s.totals.fou,s.tP)}</td><td>${cell(s.totals.rem,s.tP)}</td><td>${cell(s.totals.ess,s.tP)}</td></tr></tbody></table></div></div>`;
+}
+function exportMaterialCumul(){
+  const cu=cumul('9999-12-31'),weld=weldingVisible(),rows=[[projectName()],['Cumuls saisis — '+fD(today())],[],['Front','Zone','Sous-tronçon','Matériau','DN','Prévu (ml)','Bardage (ml)',...(weld?['Soudure PEHD (ml)']:[]),'Fouille (ml)','Pose (ml)','Essais (ml)']];
+  for(const l of LOC)for(const z of l.zones)for(const [dn,p] of Object.entries(z.dn)){
+    const d=cu[l.id]?.zones?.[z.zid]?.dn?.[dn]||{};
+    rows.push([l.nm,l.z,z.nm,zoneMaterial(z),+dn,p,+d.bar||0,...(weld?[weldedZone(z)?(+d.s||0):'N/A']:[]),+d.f||0,+d.r||0,+d.ess||0]);
+  }
+  const summary=[['Indice physique — '+projectName()],['Poids PEHD conservés ; poids de soudure transféré à la pose PVC. Regards comptés une seule fois.'],[],['Périmètre','Prévu (ml)','Pose retenue (ml)','PEHD prévu (ml)','Soudure PEHD retenue (ml)','Regards prévus','Avancement GC','Indice physique']];
+  const groups=[...LOC.map(l=>[l.nm,[l]]),...ZN.map(z=>['Zone '+z,LOC.filter(l=>l.z===z)]),['Projet',LOC]];
+  for(const [name,locs] of groups){const s=materialSummary(locs,cu);summary.push([name,s.tP,s.totals.rem,s.pehdPlanned,s.pehdPlanned?s.totals.soud:'N/A',s.gcTotal,s.gcTotal?s.rates.gc/100:'N/A',s.index/100]);}
+  const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet(rows),ss=XLSX.utils.aoa_to_sheet(summary);
+  ws['!cols']=rows[3].map((_,i)=>({wch:i<4?24:18}));ss['!cols']=summary[3].map((_,i)=>({wch:i===0?28:22}));
+  for(let r=4;r<summary.length;r++)for(const c of [6,7]){const cell=ss[XLSX.utils.encode_cell({r,c})];if(cell?.t==='n')cell.z='0.00%';}
+  XLSX.utils.book_append_sheet(wb,ws,'Cumuls par matériau');XLSX.utils.book_append_sheet(wb,ss,'Indice physique');
+  XLSX.writeFile(wb,'Cumul_'+projectIdSlug(projectShortName())+'_'+today()+'.xlsx');
+}
+
+
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  SIYO Pilot v2.0 — couche de données Supabase (03/09/2026)   ║
 // ║  Clé publiable uniquement. Jamais la clé secrète ici.        ║
@@ -75,9 +168,9 @@ function defaultProjectConfig(){return{
   revisions:[]
 };}
 function blankProjectConfig(name,shortName,company,client){return normalizeProjectConfig({
-  version:1,status:'draft',validatedAt:new Date().toISOString(),
+  materialTracking:1,version:1,status:'draft',validatedAt:new Date().toISOString(),
   identity:{name,shortName:shortName||name,code:'',client:client||'Non renseigné',owner:'Non renseigné',company:company||'SIYO LIMITED',startDate:'',targetDate:'',targetStatus:'preparation'},
-  localities:[{id:'front-1',nm:'Front 1',z:'Zone 1',tot:0,regards:0,zones:[{zid:'Z1',nm:'Tronçon 1',dn:{63:0},tot:0}]}],weights:{...DEFAULT_PHYSICAL_WEIGHTS},
+  localities:[{id:'front-1',nm:'Front 1',z:'Zone 1',tot:0,regards:0,zones:[{zid:'Z1',material:'PEHD',nm:'Tronçon 1',dn:{63:0},tot:0}]}],weights:{...DEFAULT_PHYSICAL_WEIGHTS},
   initial:{date:''},migration:{legacyPreparationFrozen:false,rinsedLocalities:[]},
   finance:{attachmentTemplate:'Non raccordé',dqeStatus:'À paramétrer',discount:0,retention:0,dqe:null},
   planning:{mode:'manual',active:'initial',initial:{id:'initial',label:'Planning contractuel initial',locked:false,deadline:'',rows:[]},revisions:[]},revisions:[]
@@ -89,6 +182,7 @@ function configFromExportV1(raw,record){
   const base=demo?defaultProjectConfig():blankProjectConfig(record?.name||raw.meta?.projet||'Projet',record?.shortName||'',record?.company||'SIYO LIMITED',record?.client||'');
   base.identity={...base.identity,name:record?.name||base.identity.name,shortName:record?.shortName||base.identity.shortName,client:record?.client||base.identity.client,owner:record?.moe||base.identity.owner,company:record?.company||base.identity.company,targetDate:p.DATE_FIN_OBJECTIF||base.identity.targetDate||'',targetStatus:record?.status||base.identity.targetStatus};
   if(Array.isArray(p.LOC)&&p.LOC.length)base.localities=cloneProjectConfig(p.LOC);
+  if(p.materialTracking===1){base.materialTracking=1;base.weights={...(p.weights||DEFAULT_PHYSICAL_WEIGHTS)};}else delete base.materialTracking;
   base.initial={date:p.ETAT_INITIAL_DATE||base.initial?.date||'',bardage:raw.etat_initial||{}};
   base.migration={...(base.migration||{}),legacyPreparationFrozen:!!raw.etat_initial};
   if(base.planning?.initial)base.planning.initial.deadline=p.DATE_FIN_OBJECTIF||base.planning.initial.deadline||'';
@@ -442,6 +536,7 @@ function configuredPlanningCurve(kind,months,cfg=PROJECT_CONFIG){
 function contractPlanningDeadline(cfg=PROJECT_CONFIG){return activePlanningVersion(cfg)?.deadline||cfg?.identity?.targetDate||'';}
 function buildPlannedCurve(months){
   const configured=configuredPlanningCurve('global',months);if(configured)return configured;
+  if(materialTracking())return months.map(()=>null);
   const coefLots={};LOC.forEach(l=>{coefLots[l.id]=coefLot(l);});
   const tPglob=LOC.reduce((s,l)=>s+l.tot,0);
   const monthly={};
@@ -494,6 +589,7 @@ function buildPlannedCurve(months){
 // l'indice opérationnel pondéré ni avec un avancement financier.
 function buildPhysicalPlannedCurve(months){
   const configured=configuredPlanningCurve('pose',months);if(configured)return configured;
+  if(materialTracking())return months.map(()=>null);
   const tPglob=LOC.reduce((s,l)=>s+l.tot,0);
   const monthly={};
   PLAN_TASKS.filter(t=>t.act==='pose').forEach(t=>{
@@ -745,6 +841,11 @@ window.addContrainteRow=addContrainteRow;window.removeContrainteRow=removeContra
 // Même grille que l'indice consolidé V1.5. Les anciens alias restent exposés
 // dans detail pour préserver les vues et exports existants.
 function avancementLot(lot,cuLot){
+  if(materialTracking()){
+    const s=materialSummary([lot],{[lot.id]:cuLot}),d={...s.rates};
+    Object.assign(d,{imp:d.topographie,bar:d.bardage,soud:d.assemblage,fou:d.ouverture,rem:d.fermeture,ess:d.essais,rec:d.recolement});
+    return{pc:s.index,detail:d};
+  }
   const det={topographie:0,bardage:0,assemblage:0,ouverture:0,fermeture:0,gc:0,essais:0,rincage:0,recolement:0,
     imp:0,bar:0,soud:0,fou:0,rem:0,ess:0,rec:0};
   // Implantation : oui/non au niveau lot (dans cuLot.imp si présent, sinon 0)
@@ -814,6 +915,7 @@ function avancementPhysique(cu){
 // Les mouvements sont plafonnés par zone/DN afin qu'une correction ou un
 // dépassement local ne puisse pas gonfler l'avancement du projet.
 function dashboardPhysicalSummary(cu){
+  if(materialTracking())return materialSummary(LOC,cu);
   const tP=LOC.reduce((s,l)=>s+l.tot,0);
   const totals={bar:0,soud:0,fou:0,rem:0,ess:0};
   let topoLength=0,gcDone=0,gcProgressTotal=0,gcTotal=0,recolementDone=0,recolementLength=0;
@@ -999,7 +1101,7 @@ function cumul(upTo){
         Object.keys(zn.dn).forEach(d=>{
           const ed=ez[d]||{};
           // Soud/Fou/Rem : cumul journalier (somme)
-          c[l.id].zones[zn.zid].dn[d].s+=(+ed.s||0);
+          if(!materialTracking()||weldedZone(zn))c[l.id].zones[zn.zid].dn[d].s+=(+ed.s||0);
           c[l.id].zones[zn.zid].dn[d].f+=(+ed.f||0);
           c[l.id].zones[zn.zid].dn[d].r+=(+ed.r||0);
           // Ess : cumul saisi quotidien (somme, comme soud/fou/rem)
@@ -1027,16 +1129,24 @@ function cumul(upTo){
   });
   return c;}
 function dayTot(rp,lid){if(!rp?.loc?.[lid])return{s:0,f:0,r:0};let s=0,f=0,r=0;const loc=LOC.find(l=>l.id===lid);
-  loc.zones.forEach(zn=>{const ez=rp.loc[lid].zones?.[zn.zid];if(!ez)return;Object.keys(zn.dn).forEach(d=>{const ed=ez[d]||{};s+=(+ed.s||0);f+=(+ed.f||0);r+=(+ed.r||0);});});return{s,f,r};}
+  loc.zones.forEach(zn=>{const ez=rp.loc[lid].zones?.[zn.zid];if(!ez)return;Object.keys(zn.dn).forEach(d=>{const ed=ez[d]||{};s+=(!materialTracking()||weldedZone(zn))?(+ed.s||0):0;f+=(+ed.f||0);r+=(+ed.r||0);});});return{s,f,r};}
 // Day totals per DN for a loc (inclut essai)
 function dayDN(rp,lid){const r={};const loc=LOC.find(l=>l.id===lid);
   loc.zones.forEach(zn=>{const ez=rp?.loc?.[lid]?.zones?.[zn.zid];if(!ez)return;
-    Object.keys(zn.dn).forEach(d=>{if(!r[d])r[d]={s:0,f:0,r:0,ess:0};const ed=ez[d]||{};r[d].s+=(+ed.s||0);r[d].f+=(+ed.f||0);r[d].r+=(+ed.r||0);r[d].ess+=(+ed.ess||0);});});return r;}
+    Object.keys(zn.dn).forEach(dn=>{const d=pipeDailyKey(zn,dn);if(!r[d])r[d]={s:0,f:0,r:0,ess:0};const ed=ez[dn]||{};r[d].s+=(!materialTracking()||weldedZone(zn))?(+ed.s||0):0;r[d].f+=(+ed.f||0);r[d].r+=(+ed.r||0);r[d].ess+=(+ed.ess||0);});});return r;}
 
 // ── COHERENCE ENGINE ──
 // Checks cumul data for physical impossibilities
 // Rules: R_cumul ≤ F_cumul AND R_cumul ≤ S_cumul (per zone/DN)
 function checkCoherence(cu){
+  if(materialTracking()){
+    const alerts=[];
+    for(const l of LOC)for(const z of l.zones)for(const [dn,prev] of Object.entries(z.dn)){
+      const d=cu[l.id]?.zones?.[z.zid]?.dn?.[dn]||{};
+      for(const [key,type] of [['f','R>F'],...(weldedZone(z)?[['s','R>S']]:[])])if((+d.r||0)>(+d[key]||0)+0.5)alerts.push({loc:l.nm,zone:zoneCaption(z),dn,type,s:+d.s||0,f:+d.f||0,r:+d.r||0,excess:+((+d.r||0)-(+d[key]||0)).toFixed(1),level:'dn'});
+    }
+    return alerts.sort((a,b)=>b.excess-a.excess);
+  }
   const alerts=[];
   LOC.forEach(l=>{
     const lc=cu[l.id];if(!lc)return;
@@ -1051,6 +1161,7 @@ function checkCoherence(cu){
 
 // Safe cumul: cap R at min(S,F) without modifying stored data
 function safeCumul(cu){
+  if(materialTracking())return JSON.parse(JSON.stringify(cu)); // Alert only; no artificial loss of special-crossing lengths.
   const sc=JSON.parse(JSON.stringify(cu));
   LOC.forEach(l=>{
     l.zones.forEach(zn=>{const zc=sc[l.id].zones?.[zn.zid];if(!zc)return;
@@ -1308,9 +1419,9 @@ function projectSlug(value){return String(value||'front').normalize('NFD').repla
 function uniqueProjectFrontId(name){const base=projectSlug(name);let id=base,n=2;while(PARAM_DRAFT.localities.some(l=>l.id===id))id=`${base}-${n++}`;return id;}
 function frontHasHistory(id){return dbDates().some(d=>!!db[d]?.loc?.[id]);}
 function zoneHasHistory(id,zid){return dbDates().some(d=>!!db[d]?.loc?.[id]?.zones?.[zid]);}
-function addProjectFront(){if(!PARAM_DRAFT)return;const name=(prompt('Nom de la nouvelle localité ou du nouveau front :')||'').trim();if(!name)return;const group=(prompt('Zone de pilotage ou groupe du front :','Ouest')||'').trim();if(!group){alert('La zone de pilotage est obligatoire.');return;}const id=uniqueProjectFrontId(name);PARAM_DRAFT.localities.push({id,nm:name,z:group,tot:0,regards:0,zones:[{zid:'Z1',nm:'Zone 1',dn:{63:0},tot:0}]});PARAM_SELECTED_LOC=id;normalizeProjectConfig(PARAM_DRAFT);saveProjectDraft();draw();}
+function addProjectFront(){if(!PARAM_DRAFT)return;const name=(prompt('Nom de la nouvelle localité ou du nouveau front :')||'').trim();if(!name)return;const group=(prompt('Zone de pilotage ou groupe du front :','Ouest')||'').trim();if(!group){alert('La zone de pilotage est obligatoire.');return;}const id=uniqueProjectFrontId(name);PARAM_DRAFT.localities.push({id,nm:name,z:group,tot:0,regards:0,zones:[{zid:'Z1',nm:'Zone 1',...(materialTracking(PARAM_DRAFT)?{material:'PEHD'}:{}),dn:{63:0},tot:0}]});PARAM_SELECTED_LOC=id;normalizeProjectConfig(PARAM_DRAFT);saveProjectDraft();draw();}
 function removeProjectFront(id){if(!PARAM_DRAFT)return;if(frontHasHistory(id)){alert('Ce front possède déjà des rapports. Il ne peut pas être supprimé ; créez une révision de ses références ou désactivez-le pour les saisies futures.');return;}const l=PARAM_DRAFT.localities.find(x=>x.id===id);if(!l||!confirm(`Supprimer le front ${l.nm} de cette révision ?`))return;PARAM_DRAFT.localities=PARAM_DRAFT.localities.filter(x=>x.id!==id);PARAM_SELECTED_LOC=PARAM_DRAFT.localities[0]?.id||'';normalizeProjectConfig(PARAM_DRAFT);saveProjectDraft();draw();}
-function addProjectZone(id){if(!PARAM_DRAFT)return;const l=PARAM_DRAFT.localities.find(x=>x.id===id);if(!l)return;const name=(prompt('Nom de la nouvelle zone ou du nouveau tronçon :',`Zone ${l.zones.length+1}`)||'').trim();if(!name)return;let n=1,zid;do{zid=`Z${n++}`;}while(l.zones.some(z=>z.zid===zid));l.zones.push({zid,nm:name,dn:{63:0},tot:0});normalizeProjectConfig(PARAM_DRAFT);saveProjectDraft();draw();}
+function addProjectZone(id){if(!PARAM_DRAFT)return;const l=PARAM_DRAFT.localities.find(x=>x.id===id);if(!l)return;const name=(prompt('Nom de la nouvelle zone ou du nouveau tronçon :',`Zone ${l.zones.length+1}`)||'').trim();if(!name)return;let n=1,zid;do{zid=`Z${n++}`;}while(l.zones.some(z=>z.zid===zid));l.zones.push({zid,nm:name,...(materialTracking(PARAM_DRAFT)?{material:'PEHD'}:{}),dn:{63:0},tot:0});normalizeProjectConfig(PARAM_DRAFT);saveProjectDraft();draw();}
 function projectDraftZoneName(id,zoneIndex,value){if(!PARAM_DRAFT)return;const z=PARAM_DRAFT.localities.find(x=>x.id===id)?.zones?.[zoneIndex];if(!z)return;z.nm=cleanText(value,120);saveProjectDraft();}
 function removeProjectZone(id,zoneIndex){if(!PARAM_DRAFT)return;const l=PARAM_DRAFT.localities.find(x=>x.id===id),z=l?.zones?.[zoneIndex];if(!z)return;if(zoneHasHistory(id,z.zid)){alert('Cette zone est déjà utilisée dans les rapports historiques et ne peut pas être supprimée.');return;}if(l.zones.length===1){alert('Un front doit conserver au moins une zone ou un tronçon.');return;}if(!confirm(`Supprimer ${z.nm||z.zid} de cette révision ?`))return;l.zones.splice(zoneIndex,1);normalizeProjectConfig(PARAM_DRAFT);saveProjectDraft();draw();}
 function projectDraftWeight(key,value){if(!PARAM_DRAFT)return;PARAM_DRAFT.weights[key]=Math.max(0,+value||0);saveProjectDraft();draw();}
@@ -1338,6 +1449,16 @@ function projectConfigErrors(cfg){
   if(Math.abs(weightTotal-100)>.01)errors.push(`La pondération physique totalise ${weightTotal.toFixed(2)} % au lieu de 100 %.`);
   const plan=activePlanningVersion(cfg),rows=[...(plan?.rows||[])].sort((a,b)=>a.month.localeCompare(b.month));
   if(cfg.planning?.mode==='manual'){if(!rows.length)errors.push('Le planning contractuel doit contenir au moins un mois.');else{let pg=-1,pp=-1;const seen=new Set();rows.forEach(r=>{if(!/^\d{4}-\d{2}$/.test(r.month||''))errors.push('Le mois du planning est invalide.');if(seen.has(r.month))errors.push(`Le mois ${r.month} apparaît deux fois dans le planning.`);seen.add(r.month);if(r.global===''||r.pose==='')errors.push(`Planning ${r.month} : les deux pourcentages sont obligatoires.`);if(+r.global<pg)errors.push(`Planning global décroissant en ${r.month}.`);if(+r.pose<pp)errors.push(`Planning de pose décroissant en ${r.month}.`);pg=+r.global;pp=+r.pose;});if(Math.abs(pg-100)>.01)errors.push('Le planning physique global doit se terminer à 100 %.');if(Math.abs(pp-100)>.01)errors.push('Le planning de pose doit se terminer à 100 %.');}if(!plan?.deadline)errors.push('L’échéance du planning contractuel est obligatoire.');if(cfg.identity?.startDate&&plan?.deadline&&plan.deadline<cfg.identity.startDate)errors.push('L’échéance contractuelle ne peut pas précéder la date de démarrage.');}
+  if(materialTracking(cfg)){
+    for(const l of cfg.localities||[]){const seen=new Set();for(const z of l.zones||[]){
+      if(seen.has(z.zid))errors.push('Identifiant de sous-tronçon dupliqué : '+z.zid);seen.add(z.zid);
+      if(!['PEHD','PVC'].includes(z.material))errors.push(l.nm+' / '+z.nm+' : matériau obligatoire.');
+      const old=PROJECT_CONFIG.localities.find(x=>x.id===l.id)?.zones.find(x=>x.zid===z.zid);
+      if(old&&zoneHasHistory(l.id,z.zid)&&zoneMaterial(old)!==z.material)errors.push('Le matériau historique ne peut pas être modifié : '+l.nm+' / '+z.nm);
+      for(const q of Object.values(z.dn||{}))if(!Number.isFinite(+q)||+q<0)errors.push('Linéaire invalide : '+l.nm+' / '+z.nm);
+    }}
+    if(!materialTracking(PROJECT_CONFIG)&&dbDates().length)errors.push('La migration du projet historique doit être vérifiée avant activation des matériaux.');
+  }
   if(!cfg._revision?.reason?.trim())errors.push('Le motif de la révision est obligatoire.');return errors;
 }
 async function validateProjectRevision(){
@@ -1359,13 +1480,17 @@ function renderParamIdentity(cfg){
 function renderParamNetwork(cfg){
   const loc=cfg.localities.find(l=>l.id===PARAM_SELECTED_LOC)||cfg.localities[0];if(loc)PARAM_SELECTED_LOC=loc.id;
   let list=`<div class="param-loc-list">${PARAM_DRAFT?'<button class="param-add-front" onclick="addProjectFront()">+ Ajouter un front</button>':''}${cfg.localities.map(l=>`<button class="param-loc-item ${l.id===PARAM_SELECTED_LOC?'active':''}" onclick="selectParamLocality('${l.id}')"><span><b>${escHtml(l.nm)}</b><small>${escHtml(l.z)}</small></span><strong>${fmt(l.tot)} ml</strong></button>`).join('')}</div>`;
-  let detail=loc?`<div class="param-loc-detail"><div class="param-loc-head"><div><span>Front sélectionné</span>${PARAM_DRAFT?`<input class="fi" value="${escHtml(loc.nm)}" onchange="projectDraftLocality('${loc.id}','nm',this.value)">`:`<b>${escHtml(loc.nm)}</b>`}</div><div><span>Zone de pilotage</span>${PARAM_DRAFT?`<input class="fi" value="${escHtml(loc.z)}" onchange="projectDraftLocality('${loc.id}','z',this.value)">`:`<b>${escHtml(loc.z)}</b>`}</div><div><span>Linéaire calculé</span><b>${fmt(loc.tot)} ml</b></div>${PARAM_DRAFT?`<div class="param-structure-actions"><button class="bt" onclick="addProjectZone('${loc.id}')">+ Zone / tronçon</button><button class="param-danger" ${frontHasHistory(loc.id)?'disabled title="Front utilisé par les rapports historiques"':''} onclick="removeProjectFront('${loc.id}')">Supprimer le front</button></div>`:''}</div>${loc.zones.map((z,zi)=>`<div class="param-zone-card"><div class="param-zone-head">${PARAM_DRAFT?`<input class="param-zone-name" value="${escHtml(z.nm||'Tronçon unique')}" onchange="projectDraftZoneName('${loc.id}',${zi},this.value)">`:`<b>${escHtml(z.nm||'Tronçon unique')}</b>`}<span>${fmt(z.tot)} ml</span>${PARAM_DRAFT?`<button class="bt" onclick="addProjectDn('${loc.id}',${zi})">+ DN</button><button class="param-zone-delete" ${zoneHasHistory(loc.id,z.zid)?'disabled title="Zone utilisée par les rapports historiques"':''} onclick="removeProjectZone('${loc.id}',${zi})">×</button>`:''}</div><div class="param-dn-grid">${Object.entries(z.dn||{}).sort((a,b)=>+b[0]-+a[0]).map(([dn,v])=>`<label><span class="dn-tag" style="border-color:${DN_CLR[dn]||'#64748b'}">DN ${dn}</span>${PARAM_DRAFT?`<input type="number" min="0" step="0.1" value="${+v||0}" oninput="stageProjectDn('${loc.id}',${zi},'${dn}',this.value)" onchange="projectDraftDn('${loc.id}',${zi},'${dn}',this.value)"><button title="Retirer ce diamètre" onclick="removeProjectDn('${loc.id}',${zi},'${dn}')">×</button>`:`<b>${fmt(v)} ml</b>`}</label>`).join('')}</div></div>`).join('')}</div>`:'';
+  let detail=loc?`<div class="param-loc-detail"><div class="param-loc-head"><div><span>Front sélectionné</span>${PARAM_DRAFT?`<input class="fi" value="${escHtml(loc.nm)}" onchange="projectDraftLocality('${loc.id}','nm',this.value)">`:`<b>${escHtml(loc.nm)}</b>`}</div><div><span>Zone de pilotage</span>${PARAM_DRAFT?`<input class="fi" value="${escHtml(loc.z)}" onchange="projectDraftLocality('${loc.id}','z',this.value)">`:`<b>${escHtml(loc.z)}</b>`}</div><div><span>Linéaire calculé</span><b>${fmt(loc.tot)} ml</b></div>${PARAM_DRAFT?`<div class="param-structure-actions"><button class="bt" onclick="addProjectZone('${loc.id}')">+ Zone / tronçon</button><button class="param-danger" ${frontHasHistory(loc.id)?'disabled title="Front utilisé par les rapports historiques"':''} onclick="removeProjectFront('${loc.id}')">Supprimer le front</button></div>`:''}</div>${loc.zones.map((z,zi)=>`<div class="param-zone-card"><div class="param-zone-head">${renderMaterialSelector(loc,z,zi)}${PARAM_DRAFT?`<input class="param-zone-name" value="${escHtml(z.nm||'Tronçon unique')}" onchange="projectDraftZoneName('${loc.id}',${zi},this.value)">`:`<b>${escHtml(z.nm||'Tronçon unique')}</b>`}<span>${fmt(z.tot)} ml</span>${PARAM_DRAFT?`<button class="bt" onclick="addProjectDn('${loc.id}',${zi})">+ DN</button><button class="param-zone-delete" ${zoneHasHistory(loc.id,z.zid)?'disabled title="Zone utilisée par les rapports historiques"':''} onclick="removeProjectZone('${loc.id}',${zi})">×</button>`:''}</div><div class="param-dn-grid">${Object.entries(z.dn||{}).sort((a,b)=>+b[0]-+a[0]).map(([dn,v])=>`<label><span class="dn-tag" style="border-color:${DN_CLR[dn]||'#64748b'}">DN ${dn}</span>${PARAM_DRAFT?`<input type="number" min="0" step="0.01" value="${+v||0}" oninput="stageProjectDn('${loc.id}',${zi},'${dn}',this.value)" onchange="projectDraftDn('${loc.id}',${zi},'${dn}',this.value)"><button title="Retirer ce diamètre" onclick="removeProjectDn('${loc.id}',${zi},'${dn}')">×</button>`:`<b>${fmt(v)} ml</b>`}</label>`).join('')}</div></div>`).join('')}</div>`:'';
   return`<div class="cd"><div class="param-section-head"><div><div class="ct">Structure du réseau</div><span>Les linéaires des zones, des fronts et du projet sont calculés automatiquement depuis les DN.</span></div><div class="param-total"><small>Total projet</small><b>${fmt(projectConfigTotal(cfg))} ml</b></div></div><div class="param-network-layout">${list}${detail}</div><div class="saisie-note">Un front ou une zone déjà utilisé par un rapport reste verrouillé. Les nouveaux éléments créés dans la révision peuvent être supprimés avant validation.</div></div>`;
 }
 function renderParamWorks(cfg){
   return`<div class="param-two-col"><div class="cd"><div class="ct">Regards et ouvrages GC</div><div class="param-regard-list">${cfg.localities.map(l=>`<label><span>${escHtml(l.nm)}</span>${PARAM_DRAFT?`<input type="number" min="0" step="1" value="${l.regards||0}" onchange="projectDraftLocality('${l.id}','regards',this.value,'number')">`:`<b>${l.regards||'N/A'}</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Jalons de clôture</div><div class="param-readonly-list"><div><b>Essais de pression</b><span>Suivi en linéaire validé</span></div><div><b>Rinçage-désinfection</b><span>Validation par localité</span></div><div><b>Plans de récolement</b><span>Validation par localité</span></div></div><div class="saisie-note">Les pourcentages intermédiaires des regards restent calculés en interne à partir des états terrain.</div></div></div>`;
 }
 function renderParamRules(cfg){
+  if(materialTracking(cfg)){
+    const labels={topographie:'Implantation topo',bardage:'Bardage',assemblage:'Soudure préalable',ouverture:'Fouille',fermeture:'Pose, remblai compris',gc:'Regards',essais:'Essais conformes',rincage:'Rinçage-désinfection'},pvc=physicalWeightsFor('PVC',cfg.weights);
+    return `<div class="cd"><div class="ct">Pondération physique par matériau</div><p>Le PVC est emboîté pendant la pose. Le poids de la soudure préalable est transféré à la pose PVC. Les regards sont comptés une seule fois.</p><table class="tb"><thead><tr><th>Activité</th><th>PEHD (%)</th><th>PVC (%)</th></tr></thead><tbody>${Object.entries(labels).map(([k,label])=>`<tr><td>${label}</td><td>${PARAM_DRAFT?`<input class="fi" type="number" min="0" max="100" step="0.0001" value="${cfg.weights[k]}" onchange="projectDraftWeight('${k}',this.value)">`:(+cfg.weights[k]).toFixed(4)}</td><td>${k==='assemblage'?'Non applicable':pvc[k].toFixed(4)}</td></tr>`).join('')}<tr><td>Total</td><td>${Object.values(cfg.weights).reduce((a,b)=>a+(+b||0),0).toFixed(4)}</td><td>${Object.values(pvc).reduce((a,b)=>a+(+b||0),0).toFixed(4)}</td></tr></tbody></table><p>Grille de transition issue de Dispersion ; indice physique distinct du taux financier. Sans regards, les poids applicables sont renormalisés à 100 %.</p><div class="ct">Grille des regards</div>${Object.values(GC_STAGES).map(v=>`<p>${v.label} : ${Math.round(v.progress*100)} %</p>`).join('')}</div>`;
+  }
   const labels={topographie:'Implantation topo',bardage:'Bardage',assemblage:'Assemblage / soudure',ouverture:'Fouille',fermeture:'Conduite posée',gc:'Ouvrages GC',essais:'Essais conformes',rincage:'Rinçage-désinfection'},total=Object.values(cfg.weights).reduce((s,v)=>s+(+v||0),0);
   return`<div class="param-two-col"><div class="cd"><div class="param-section-head"><div><div class="ct">Pondération physique interne</div><span>Visible uniquement par le Chef de projet.</span></div><span class="kb ${Math.abs(total-100)<.01?'bg':'br'}">Total ${total.toFixed(2)} %</span></div><div class="param-weight-list">${Object.entries(labels).map(([k,l])=>`<label><span>${l}</span>${PARAM_DRAFT?`<input type="number" min="0" step="0.01" value="${cfg.weights[k]||0}" onchange="projectDraftWeight('${k}',this.value)">`:`<b>${(+cfg.weights[k]||0).toFixed(2)} %</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Grille interne des regards</div><div class="param-readonly-list">${Object.values(GC_STAGES).map(s=>`<div><b>${s.label}</b><span>${Math.round(s.progress*100)} % du regard</span></div>`).join('')}</div><div class="saisie-note">Cette grille n’est pas affichée dans le tableau de bord public ; elle reste consultable ici pour rendre le calcul auditable.</div></div></div>`;
 }
@@ -1395,13 +1520,13 @@ function pgSaisiePreparation(ex,cuBefore,reportKind){
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#6366f1':'#7c6df2'}"></span> Préparation — Zone ${escHtml(zone)}</div>`;
     locs.forEach(loc=>{
       const exL=ex?.loc?.[loc.id]||{},cuL=cuBefore?.[loc.id]||{};
-      h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>Implantation topo du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay||''}" ${reportKind==='production'?'min="0"':''} step=".1" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
+      h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>Implantation topo du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
       loc.zones.forEach(zn=>{
         const exZ=exL.zones?.[zn.zid]||{};
         h+=`<div class="prep-zone"><div class="zn-label"><span class="zn-tag">${escHtml(zn.nm||'Tronçon unique')}</span><span class="zn-tot">Bardage du jour par DN</span></div><table class="tb prep-table"><thead><tr><th>DN</th><th class="nr">Prévu</th><th class="nr">Cumul avant rapport</th><th class="nr">Bardage du jour</th></tr></thead><tbody>`;
         Object.keys(zn.dn).sort((a,b)=>+a-+b).forEach(dn=>{
           const exD=exZ[dn]||{},before=cuL.zones?.[zn.zid]?.dn?.[dn]?.bar||0;
-          h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td><td class="nr">${fmt(zn.dn[dn])}</td><td class="nr">${fmt(before)}</td><td><input type="number" class="ci movement-input" id="bar_${loc.id}_${zn.zid}_${dn}" value="${exD.barDay||''}" ${reportKind==='production'?'min="0"':''} step=".1" placeholder="0"></td></tr>`;
+          h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td><td class="nr">${fmt(zn.dn[dn])}</td><td class="nr">${fmt(before)}</td><td><input type="number" class="ci movement-input" id="bar_${loc.id}_${zn.zid}_${dn}" value="${exD.barDay||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;
         });
         h+=`</tbody></table></div>`;
       });
@@ -1469,6 +1594,10 @@ function reportFinishingRows(rp,zoneFilter=''){
 }
 
 function zonePhysicalSummary(zone,cu){
+  if(materialTracking()){
+    const locs=LOC.filter(l=>l.z===zone),s=materialSummary(locs,cu);
+    return{locs,planned:s.tP,totals:{soud:s.totals.soud,fou:s.totals.fou,pose:s.totals.rem,ess:s.totals.ess},gcTotal:s.gcTotal,gcDone:s.gcDone,gcProgress:s.gcProgressTotal,rinseLength:s.rdLength,recoDone:s.recolementDone,rates:{soud:s.rates.assemblage,fou:s.rates.ouverture,pose:s.rates.fermeture,ess:s.rates.essais,rinse:s.rates.rincage,gc:s.rates.gc,reco:s.rates.recolement}};
+  }
   const locs=LOC.filter(l=>l.z===zone);
   const planned=locs.reduce((s,l)=>s+l.tot,0);
   const totals={soud:0,fou:0,pose:0,ess:0};
@@ -1491,6 +1620,7 @@ function zonePhysicalSummary(zone,cu){
     rates:{soud:rate(totals.soud),fou:rate(totals.fou),pose:rate(totals.pose),ess:rate(totals.ess),rinse:rate(rinseLength),gc:gcTotal?Math.min(100,gcProgress/gcTotal*100):0,reco:locs.length?Math.min(100,recoDone/locs.length*100):0}};
 }
 function lotRetainedTotals(lot,cuLot){
+  if(materialTracking()){const s=materialSummary([lot],{[lot.id]:cuLot});return{soud:s.totals.soud,fou:s.totals.fou,pose:s.totals.rem,ess:s.totals.ess};}
   const out={soud:0,fou:0,pose:0,ess:0};
   lot.zones.forEach(zn=>Object.keys(zn.dn).forEach(dn=>{
     const ref=+zn.dn[dn]||0,dc=cuLot?.zones?.[zn.zid]?.dn?.[dn]||{};
@@ -1554,15 +1684,15 @@ function pgSaisie(){
       loc.zones.forEach(zn=>{
         const dns=Object.keys(zn.dn).sort((a,b)=>a-b);
         const exZ=exL.zones?.[zn.zid]||{};
-        if(hasZ)h+=`<div class="zn-label"><span class="zn-tag">${zn.nm}</span><span class="zn-tot">${fmt(zn.tot)} ml</span></div>`;
-        h+=`<table class="tb dnt"><thead><tr><th>DN</th><th>Prévu</th><th class="nr">Soudure</th><th class="nr">Fouille</th><th class="nr">Pose</th><th class="nr">Essai</th></tr></thead><tbody>`;
+        if(hasZ||materialTracking())h+=`<div class="zn-label"><span class="zn-tag">${escHtml(zoneCaption(zn))}</span><span class="zn-tot">${fmt(zn.tot)} ml</span></div>`;
+        h+=`<table class="tb dnt ${materialTracking()&&!weldedZone(zn)?'pvc-production':''}"><thead><tr><th>DN</th><th>Prévu</th><th class="nr weld-cell">Soudure PEHD</th><th class="nr">Fouille</th><th class="nr">Pose</th><th class="nr">Essai</th></tr></thead><tbody>`;
         dns.forEach(dn=>{const exD=exZ[dn]||{};
           h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td>
             <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8a95a5">${fmt(zn.dn[dn])}</td>
-            <td><input type="number" class="ci movement-input" id="s_${loc.id}_${zn.zid}_${dn}" value="${exD.s||''}" ${reportKind==='production'?'min="0"':''} step=".1" placeholder="0"></td>
-            <td><input type="number" class="ci movement-input" id="f_${loc.id}_${zn.zid}_${dn}" value="${exD.f||''}" ${reportKind==='production'?'min="0"':''} step=".1" placeholder="0"></td>
-            <td><input type="number" class="ci movement-input" id="r_${loc.id}_${zn.zid}_${dn}" value="${exD.r||''}" ${reportKind==='production'?'min="0"':''} step=".1" placeholder="0"></td>
-            <td><input type="number" class="ci movement-input" id="ess_${loc.id}_${zn.zid}_${dn}" value="${exD.ess||''}" ${reportKind==='production'?'min="0"':''} step=".1" placeholder="0"></td></tr>`;});
+            <td class="weld-cell">${!materialTracking()||weldedZone(zn)?`<input type="number" class="ci movement-input" id="s_${loc.id}_${zn.zid}_${dn}" value="${exD.s||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0">`:''}</td>
+            <td><input type="number" class="ci movement-input" id="f_${loc.id}_${zn.zid}_${dn}" value="${exD.f||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td>
+            <td><input type="number" class="ci movement-input" id="r_${loc.id}_${zn.zid}_${dn}" value="${exD.r||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td>
+            <td><input type="number" class="ci movement-input" id="ess_${loc.id}_${zn.zid}_${dn}" value="${exD.ess||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;});
         h+=`</tbody></table>`;
       });
       
@@ -1581,7 +1711,7 @@ function pgSaisie(){
     const locs=LOC.filter(l=>l.z===zone);
     const exZ=ex?.logistique?.[zone]||{};
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Zone ${zone}</div>
-      <table class="tb"><thead><tr><th>Localité</th><th class="nr">Fouilleurs</th><th class="nr">Soudeurs</th><th>Note</th></tr></thead><tbody>`;
+      <table class="tb"><thead><tr><th>Localité</th><th class="nr">Fouilleurs</th><th class="nr">${materialTracking()?'Poseurs / soudeurs':'Soudeurs'}</th><th>Note</th></tr></thead><tbody>`;
     locs.forEach(l=>{
       const eL=ex?.eff?.[l.id]||{};
       h+=`<tr><td>${escHtml(l.nm)}</td>
@@ -1637,6 +1767,7 @@ function collect(){const d={loc:{},eff:{},logistique:{},finitions:{regards:{},gc
           r:+(document.getElementById(`r_${l.id}_${zn.zid}_${dn}`)?.value)||0,
           ess:+(document.getElementById(`ess_${l.id}_${zn.zid}_${dn}`)?.value)||0
         };
+        if(materialTracking()&&!weldedZone(zn))delete zd[dn].s;
         if(barRaw!=='')zd[dn].barDay=+barRaw||0;
         const previousDn=previous.zones?.[zn.zid]?.[dn]||{};
         if(previousDn.bar!==undefined&&previousDn.barDay===undefined)zd[dn].bar=previousDn.bar;
@@ -1770,11 +1901,11 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
       <div class="kc"><div class="kl">Ouvrages GC</div><div class="kv">${synth.gcProgressTotal>0?synth.rates.gc.toFixed(1)+'%':'Non renseigné'}</div><div class="ksb">${synth.gcDone} / ${synth.gcTotal} regards réceptionnés</div></div>
       <div class="kc"><div class="kl">Mise en service & documents</div><div class="report-dual-kpi"><span>Rinçage <b>${synth.rates.rincage.toFixed(1)}%</b></span><span>Récolement <b>${synth.rates.recolement.toFixed(1)}%</b></span></div></div>
     </div>
-    <div class="report-production-strip"><span><b>Assemblage / soudure</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span><span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
+    <div class="report-production-strip">${weldingVisible()?`<span><b>Soudure PEHD</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
     ${qualite.ecartPlafonnement>0.05?`<details class="report-quality no-print"><summary>Contrôle des données brutes</summary><div>La pose brute saisie est de ${fmt(qualite.remblaiBrut)} ml ; ${fmt(qualite.remblaiPlafonne)} ml sont retenus après plafonnement par zone et DN. Écart à analyser : ${fmt(qualite.ecartPlafonnement)} ml.</div></details>`:''}
     ${rp.kind==='correction'||negCount?`<div class="alert-box" style="border-color:#f5a623;background:#fffaf0"><div class="alert-header">🧾 Rapport de correction · ${negCount} mouvement${negCount>1?'s':''} négatif${negCount>1?'s':''}</div><div class="alert-body"><b>Motif :</b> ${escHtml(rp.correctionReason||'Correction historique — motif initial non documenté')}</div></div>`:''}
     ${renderAlerts(alerts)}
-    ${alerts.length?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    ${alerts.length&&!materialTracking()?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <label style="font-size:12px;color:#5a6778;display:flex;align-items:center;gap:6px;cursor:pointer">
         <input type="checkbox" ${safeMode?'checked':''} onchange="safeMode=this.checked;draw()" style="width:16px;height:16px">
         🛡️ Mode sécurisé (plafonner R ≤ min(S,F))
@@ -1784,6 +1915,7 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
 
   // Activités du jour — TABLEAU PAR ZONE / LOCALITÉ / DN
   ZN.forEach(zone=>{const locs=LOC.filter(l=>l.z===zone);
+    if(materialTracking()){h+=renderMaterialDaily(zone,locs,rp);return;}
     let rows='';
     locs.forEach(l=>{
       const dd=dayDN(rp,l.id);const pcs=(rp.loc[l.id]?.p||'').trim();
@@ -1806,6 +1938,7 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
   // Cumul — détaillé par zone/DN pour Oumé & Hiré, par DN pour les autres
   h+=`<div class="st">Cumul au ${fD(SD)}</div>`;
   ZN.forEach(zone=>{const locs=LOC.filter(l=>l.z===zone);
+    if(materialTracking()){h+=renderMaterialCumulative(zone,locs,cu);return;}
     const zSummary=zonePhysicalSummary(zone,cu),zP=zSummary.planned,zS=zSummary.totals.soud,zF=zSummary.totals.fou,zR=zSummary.totals.pose,zE=zSummary.totals.ess;
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Zone ${zone} — ${fmt(zP)} ml</div>
       <div style="overflow-x:auto"><table class="tb"><thead><tr><th>Localité</th><th>Détail</th><th class="nr">Prévu</th><th class="nr">Soudure</th><th>%</th><th class="nr">Fouille</th><th>%</th><th class="nr">Pose</th><th>%</th><th class="nr">Essai</th><th>%</th></tr></thead><tbody>`;
@@ -1819,7 +1952,7 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
           const zc=cu[l.id].zones[zn.zid];
           const znS=zc.s,znF=zc.f,znR=zc.r;
           let znE=0;Object.keys(zn.dn).forEach(dn=>{znE+=(zc.dn[dn]?.ess||0);});
-          h+=`<tr style="background:#f0f4f8;font-weight:500;font-size:12px"><td></td><td><span class="zn-tag">${zn.nm}</span></td><td class="nr" style="color:#5a6778">${fmt(zn.tot)}</td><td class="nr">${fmt(znS)}</td><td>${bar(pc(znS,zn.tot))}</td><td class="nr">${fmt(znF)}</td><td>${bar(pc(znF,zn.tot))}</td><td class="nr">${fmt(znR)}</td><td>${bar(pc(znR,zn.tot))}</td><td class="nr">${fmt(znE)}</td><td>${bar(pc(znE,zn.tot))}</td></tr>`;
+          h+=`<tr style="background:#f0f4f8;font-weight:500;font-size:12px"><td></td><td><span class="zn-tag">${escHtml(zoneCaption(zn))}</span></td><td class="nr" style="color:#5a6778">${fmt(zn.tot)}</td><td class="nr">${fmt(znS)}</td><td>${bar(pc(znS,zn.tot))}</td><td class="nr">${fmt(znF)}</td><td>${bar(pc(znF,zn.tot))}</td><td class="nr">${fmt(znR)}</td><td>${bar(pc(znR,zn.tot))}</td><td class="nr">${fmt(znE)}</td><td>${bar(pc(znE,zn.tot))}</td></tr>`;
           Object.keys(zn.dn).sort((a,b)=>a-b).forEach(dn=>{
             const prevu=zn.dn[dn];
             const dc=zc.dn[dn]||{s:0,f:0,r:0,ess:0};
@@ -1861,7 +1994,7 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Zone ${zone}</div>`;
     // Effectifs table
     if(tFl+tSd>0){
-      h+=`<table class="tb" style="margin-bottom:12px"><thead><tr><th>Localité</th><th class="nr">Fouilleurs</th><th class="nr">Soudeurs</th><th>Note</th></tr></thead><tbody>`;
+      h+=`<table class="tb" style="margin-bottom:12px"><thead><tr><th>Localité</th><th class="nr">Fouilleurs</th><th class="nr">${materialTracking()?'Poseurs / soudeurs':'Soudeurs'}</th><th>Note</th></tr></thead><tbody>`;
       locs.forEach(l=>{const e=rp.eff?.[l.id]||{};if(!(+e.f||0)&&!(+e.s||0))return;
         h+=`<tr><td>${escHtml(l.nm)}</td><td class="nr">${e.f||0}</td><td class="nr">${e.s||0}</td><td style="font-size:11px;color:#8a95a5">${escHtml(e.n||'')}</td></tr>`;});
       h+=`<tr style="font-weight:700;border-top:2px solid #dce1e9"><td>Total</td><td class="nr">${tFl}</td><td class="nr">${tSd}</td><td></td></tr></tbody></table>`;}
@@ -1913,7 +2046,7 @@ function pgWhatsapp(){
         if(v.f)parts.push('Fouille: '+fmt(v.f)+' ml');
         if(v.r)parts.push('Pose: '+fmt(v.r)+' ml');
         if(v.ess)parts.push('Essai: '+fmt(v.ess)+' ml');
-        lines.push(`  ▸ DN${dn} — ${parts.join(' | ')}`);});
+        lines.push(`  ▸ ${pipeLabel(dn)} — ${parts.join(' | ')}`);});
       if(pcs)lines.push(`  ▸ Pièces et raccords: ${pcs}`);
       if(lines.length){activeLocalities++;txt+=`📍 *${l.nm.toUpperCase()}*\n${lines.join('\n')}\n\n`;}
     });
@@ -1941,17 +2074,17 @@ function pgWhatsapp(){
     if(WA_MODE==='detail'){
       txt+=`━━━━━━━━━━━━━━━━━━\n`;
       txt+=`*${sectionNo++}. DÉTAIL CUMULÉ PAR LOCALITÉ*\n\n`;
-      locs.forEach(l=>{const retained=lotRetainedTotals(l,cu[l.id]);txt+=`📍 *${l.nm.toUpperCase()}*\n  ▸ Pose: ${fmt(retained.pose)} / ${fmt(l.tot)} ml (${pc(retained.pose,l.tot).toFixed(1)}%)\n  ▸ Soudure: ${fmt(retained.soud)} ml · Fouille: ${fmt(retained.fou)} ml · Essais: ${fmt(retained.ess)} ml\n${l.regards?`  ▸ Regards: ${pc(cu[l.id].gcProgress||0,l.regards).toFixed(1)}% · ${cu[l.id].gc||0}/${l.regards} réceptionnés\n`:''}\n`;});
+      locs.forEach(l=>{const retained=lotRetainedTotals(l,cu[l.id]);txt+=`📍 *${l.nm.toUpperCase()}*\n  ▸ Pose: ${fmt(retained.pose)} / ${fmt(l.tot)} ml (${pc(retained.pose,l.tot).toFixed(1)}%)\n${weldingVisible([l])?`  ▸ Soudure PEHD: ${fmt(retained.soud)} ml · `:'  ▸ '}Fouille: ${fmt(retained.fou)} ml · Essais: ${fmt(retained.ess)} ml\n${l.regards?`  ▸ Regards: ${pc(cu[l.id].gcProgress||0,l.regards).toFixed(1)}% · ${cu[l.id].gc||0}/${l.regards} réceptionnés\n`:''}\n`;});
     }
 
     let tFl2=0,tSd2=0;
     const staffLines=[];
-    locs.forEach(l=>{const e=rp.eff?.[l.id]||{};const fl=(+e.f||0),sd=(+e.s||0);if(!fl&&!sd)return;tFl2+=fl;tSd2+=sd;if(WA_MODE==='detail')staffLines.push(`  👷 ${l.nm}: ${fl} fouilleurs, ${sd} soudeurs${e.n?' ('+e.n+')':''}`);});
+    locs.forEach(l=>{const e=rp.eff?.[l.id]||{};const fl=(+e.f||0),sd=(+e.s||0);if(!fl&&!sd)return;tFl2+=fl;tSd2+=sd;if(WA_MODE==='detail')staffLines.push(`  👷 ${l.nm}: ${fl} fouilleurs, ${sd} ${materialTracking()?'poseurs / soudeurs':'soudeurs'}${e.n?' ('+e.n+')':''}`);});
     if(tFl2+tSd2||km||lg.carburant||(lg.remarques&&lg.remarques!=='RAS')){
       txt+=`━━━━━━━━━━━━━━━━━━\n`;
       txt+=`*${sectionNo++}. RESSOURCES & LOGISTIQUE*\n\n`;
       if(staffLines.length)txt+=staffLines.join('\n')+'\n';
-      if(tFl2+tSd2>0)txt+=`  ▸ Effectif déclaré: *${tFl2+tSd2}* (${tFl2} fouilleurs · ${tSd2} soudeurs)\n`;
+      if(tFl2+tSd2>0)txt+=`  ▸ Effectif déclaré: *${tFl2+tSd2}* (${tFl2} fouilleurs · ${tSd2} ${materialTracking()?'poseurs / soudeurs':'soudeurs'})\n`;
       if(km)txt+=`  ▸ Kilométrage: ${fmt(km)} km\n`;
       if(lg.carburant)txt+=`  ▸ Carburant: ${lg.carburant} L\n`;
       if(lg.remarques&&lg.remarques!=='RAS')txt+=`  ▸ ${lg.remarques}\n`;
@@ -2370,13 +2503,13 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
   const actLbl=actLabels[act];
   // Collecter tous les DN du lot (fusion des zones)
   const allDN=new Set();
-  loc.zones.forEach(zn=>Object.keys(zn.dn).forEach(dn=>allDN.add(dn)));
+  loc.zones.forEach(zn=>Object.keys(zn.dn).forEach(dn=>(!materialTracking()||act!=='s'||weldedZone(zn))&&allDN.add(pipeDailyKey(zn,dn))));
   const dns=[...allDN].sort((a,b)=>a-b);
   // Prévu par DN (somme sur toutes les zones)
   const prevuParDN={};
   dns.forEach(dn=>{prevuParDN[dn]=0;});
-  loc.zones.forEach(zn=>Object.keys(zn.dn).forEach(dn=>{prevuParDN[dn]+=zn.dn[dn];}));
-  const prevuTotal=loc.tot;
+  loc.zones.forEach(zn=>Object.keys(zn.dn).forEach(dn=>{if(!materialTracking()||act!=='s'||weldedZone(zn))prevuParDN[pipeDailyKey(zn,dn)]+=zn.dn[dn];}));
+  const prevuTotal=materialTracking()&&act==='s'?pehdLength([loc]):loc.tot;
   // Production par mois et par DN pour l'activité choisie
   const prodParMoisDN={}; // {mois: {DN: val}}
   mKeys.forEach(m=>{prodParMoisDN[m]={};dns.forEach(dn=>{prodParMoisDN[m][dn]=0;});});
@@ -2387,7 +2520,7 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
     loc.zones.forEach(zn=>{
       const ez=rp.loc[loc.id].zones?.[zn.zid];if(!ez)return;
       Object.keys(zn.dn).forEach(dn=>{
-        prodParMoisDN[m][dn]+=(+ez[dn]?.[act]||0);
+        if(!materialTracking()||act!=='s'||weldedZone(zn))prodParMoisDN[m][pipeDailyKey(zn,dn)]+=(+ez[dn]?.[act]||0);
       });
     });
   });
@@ -2401,7 +2534,7 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
     </div>
     <div style="overflow-x:auto"><table class="tb"><thead><tr>
       <th>Mois</th>
-      ${dns.map(dn=>`<th class="nr" style="font-size:10px"><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></th>`).join('')}
+      ${dns.map(dn=>`<th class="nr" style="font-size:10px"><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">${pipeLabel(dn)}</span></th>`).join('')}
       <th class="nr">Total mois</th>
     </tr></thead><tbody>`;
   // Lignes mois
@@ -2442,7 +2575,7 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
   const pctTot=prevuTotal>0?(totRealise/prevuTotal)*100:0;
   h+=`<td class="nr" style="color:${pctTot>100.05?'#d97706':cP(pctTot)}" title="${pctTot>100.05?'Dépassement de la référence prévue':''}">${pctTot.toFixed(1)}%${pctTot>100.05?' ⚠':''}</td></tr>`;
   h+=`</tbody></table></div>
-    <div style="font-size:10px;color:#8a95a5;margin-top:8px;font-style:italic">💡 Changez le métier pour comparer le détail Soudure / Fouille / Pose / Essai.</div>
+    <div style="font-size:10px;color:#8a95a5;margin-top:8px;font-style:italic">Changez le métier pour comparer les activités applicables.</div>
   </div>`;
   return h;
 }
@@ -2450,7 +2583,8 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
 // Le tableau mensuel est indépendant de la courbe de trajectoire. Changer de
 // métier ne reconstruit donc plus le tableau de bord ni le graphique.
 function renderMonthlyPivot(cu,mKeys){
-  const actLabels=DG_ACTIVITY_LABELS,actColors=DG_ACTIVITY_COLORS;
+  if(!weldingVisible()&&DG_ACT_PIVOT==='s')DG_ACT_PIVOT='r';
+  const actLabels=Object.fromEntries(Object.entries(DG_ACTIVITY_LABELS).filter(([k])=>k!=='s'||weldingVisible())),actColors=DG_ACTIVITY_COLORS;
   const prodParMoisLoc={};
   LOC.forEach(l=>{prodParMoisLoc[l.id]={};});
   dbDates().sort().forEach(d=>{
@@ -2461,7 +2595,7 @@ function renderMonthlyPivot(cu,mKeys){
       l.zones.forEach(zn=>{
         const ez=rp.loc[l.id]?.zones?.[zn.zid];if(!ez)return;
         Object.keys(zn.dn).forEach(dn=>{
-          prodParMoisLoc[l.id][m]+=(+ez[dn]?.[DG_ACT_PIVOT]||0);
+          if(!materialTracking()||DG_ACT_PIVOT!=='s'||weldedZone(zn))prodParMoisLoc[l.id][m]+=(+ez[dn]?.[DG_ACT_PIVOT]||0);
         });
       });
     });
@@ -2506,7 +2640,8 @@ function renderMonthlyPivot(cu,mKeys){
   h+=`<tr style="font-weight:700;border-top:2px solid #dce1e9;background:#f0f4f8"><td>TOTAL SAISI</td>`;
   LOC.forEach(l=>{
     const v=totParLoc[l.id];
-    const pct=l.tot>0?(v/l.tot)*100:0;
+    const planned=materialTracking()&&DG_ACT_PIVOT==='s'?pehdLength([l]):l.tot;
+    const pct=planned>0?(v/planned)*100:0;
     const over=pct>100.05;
     h+=`<td class="nr" style="color:${v<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${Math.abs(v)>0.001?fmt(Math.round(v)):'—'}<div style="font-size:9px;color:${over?'#d97706':'#8a95a5'};font-weight:${over?600:400}" title="${over?'Dépassement de la référence prévue':''}">${pct>0?pct.toFixed(0)+'%'+(over?' ⚠':''):''}</div></td>`;
   });
@@ -2529,7 +2664,7 @@ function refreshMonthlyPivot(scrollToDetail=false){
 }
 
 function setDGActivity(activity){
-  if(!Object.prototype.hasOwnProperty.call(DG_ACTIVITY_LABELS,activity))return;
+  if(!Object.prototype.hasOwnProperty.call(DG_ACTIVITY_LABELS,activity)||(activity==='s'&&!weldingVisible()))return;
   DG_ACT_PIVOT=activity;
   refreshMonthlyPivot(false);
 }
@@ -2544,7 +2679,7 @@ function toggleDGOperational(){
   const chart=charts.find(c=>c?.canvas?.id==='chDGcurve');
   if(chart){
     const index=chart.data.datasets.findIndex(d=>d.label==='Indice opérationnel interne');
-    if(index>=0){chart.data.datasets[index].hidden=!DG_SHOW_OPERATIONAL;chart.update();}
+    if(index>=0){chart.data.datasets[index].hidden=!DG_SHOW_OPERATIONAL;const planned=chart.data.datasets.find(d=>d.label==='Indice physique prévu');if(planned)planned.hidden=!DG_SHOW_OPERATIONAL;chart.update();}
   }
   const button=document.getElementById('toggle-dg-operational');
   if(button){
@@ -2612,7 +2747,7 @@ function pgDG(){
       <div class="decision-number">${avPhysique}<span>%</span></div>
       <div class="decision-progress"><span style="width:${Math.min(100,synth.index)}%"></span></div>
       <div class="decision-foot">${synth.applicableKeys.length} composantes applicables · non financier</div>
-      <div class="decision-foot" title="Méthode des attachements N°01 à N°08 : implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½">Indice de continuité (méthode des attachements) : <b>${indiceContinuite(cu).toFixed(1)} %</b></div>
+      ${continuityVisible()?`<div class="decision-foot" title="Méthode des attachements N°01 à N°08 : implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½">Indice de continuité (méthode des attachements) : <b>${indiceContinuite(cu).toFixed(1)} %</b></div>`:''}
     </div>
     <div class="decision-card decision-card--financial">
       <div class="decision-kicker">Avancement financier</div>
@@ -2629,7 +2764,7 @@ function pgDG(){
     <div class="decision-card decision-card--quality">
       <div class="decision-kicker">Contrôles et mise en service</div>
       <div class="control-row"><div><span>Essais conformes</span><b>${synth.rates.essais.toFixed(1)}%</b></div><div class="control-track"><span style="width:${synth.rates.essais}%"></span></div><small>${fmt(synth.totals.ess)} ml validés</small></div>
-      <div class="control-row"><div><span>Rinçage-désinfection</span><b>${synth.rates.rincage.toFixed(1)}%</b></div><div class="control-track"><span style="width:${synth.rates.rincage}%"></span></div><small>${fmt(synth.rdLength)} ml · localités Est</small></div>
+      <div class="control-row"><div><span>Rinçage-désinfection</span><b>${synth.rates.rincage.toFixed(1)}%</b></div><div class="control-track"><span style="width:${synth.rates.rincage}%"></span></div><small>${fmt(synth.rdLength)} ml · ${materialTracking()?'fronts validés':'localités Est'}</small></div>
     </div>
   </div>`;
 
@@ -2640,7 +2775,7 @@ function pgDG(){
       ${activityRow('Bardage',synth.rates.bardage,fmt(synth.totals.bar)+' ml','#7c6df2')}
     </div>
     <div class="activity-group"><div class="activity-title"><span class="activity-dot" style="background:#2c7be5"></span>Production réseau</div>
-      ${activityRow('Assemblage / soudure',synth.rates.assemblage,fmt(synth.totals.soud)+' ml','#2c7be5')}
+      ${weldingVisible()?activityRow('Soudure PEHD',synth.rates.assemblage,fmt(synth.totals.soud)+' ml','#2c7be5'):''}
       ${activityRow('Fouille',synth.rates.ouverture,fmt(synth.totals.fou)+' ml','#f5a623')}
       ${activityRow('Conduite posée',synth.rates.fermeture,fmt(synth.totals.rem)+' ml','#36b37e')}
     </div>
@@ -2820,7 +2955,7 @@ function pgDG(){
       <div class="ct" style="margin:0"><span class="dt" style="background:#36b37e"></span> Trajectoire d'avancement physique</div>
       <button id="toggle-dg-operational" aria-pressed="${DG_SHOW_OPERATIONAL}" class="no-print" onclick="toggleDGOperational()" style="font-size:10px;padding:5px 10px;border:1px solid #dce1e9;border-radius:6px;background:#f8fafc;color:#5a6778;cursor:pointer">${DG_SHOW_OPERATIONAL?'Masquer l’indice interne':'Afficher l’indice interne'}</button>
     </div>
-    <div style="font-size:10px;color:#8a95a5;margin:4px 0 10px 15px">Comparaison de la conduite posée retenue avec le planning contractuel initial. La courbe grise pointillée est l'<b>indice de continuité</b>, calculé avec la méthode des attachements N°01 à N°08 (implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½) : c'est la lecture comparable aux situations signées. L'indice physique consolidé V2 (pondération à huit composantes adoptée le 31/08/2026) est recalculé sur tout l'historique et ne doit pas être comparé aux attachements.<span id="dg-index-gap"></span></div>
+    ${continuityVisible()?`<div style="font-size:10px;color:#8a95a5;margin:4px 0 10px 15px">Comparaison de la conduite posée retenue avec le planning contractuel initial. La courbe grise pointillée est l'<b>indice de continuité</b>, calculé avec la méthode des attachements N°01 à N°08 (implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½) : c'est la lecture comparable aux situations signées. L'indice physique consolidé V2 (pondération à huit composantes adoptée le 31/08/2026) est recalculé sur tout l'historique et ne doit pas être comparé aux attachements.<span id="dg-index-gap"></span></div>`:'<p>Conduite posée et indice physique par matériau comparés à leurs objectifs respectifs. Les objectifs globaux doivent utiliser la même pondération que le réalisé.</p>'}
     <div class="ch" style="height:300px"><canvas id="chDGcurve"></canvas></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:10px">
       <div style="padding:9px 11px;background:#ecfdf5;border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Conduite posée retenue</div><b style="color:#15803d">${physicalAtLatest.toFixed(1)}% · ${fmt(synth.totals.rem)} ml</b></div>
@@ -2844,7 +2979,7 @@ function pgDG(){
       <div style="overflow-x:auto"><table class="tb"><thead><tr>
         <th>Lot</th><th>Localité</th><th>Zone</th><th class="nr">Linéaire de référence</th>
         <th class="nr lot-detail" style="${lotDetailStyle}">Bardage saisi</th>
-        <th class="nr lot-detail" style="${lotDetailStyle}">Soudure saisie</th>
+        ${weldingVisible()?`<th class="nr lot-detail" style="${lotDetailStyle}">Soudure saisie</th>`:''}
         <th class="nr lot-detail" style="${lotDetailStyle}">Fouille saisie</th>
         <th class="nr lot-detail" style="${lotDetailStyle}">Pose saisie</th>
         <th class="nr">Conduite posée retenue</th><th class="nr">Reste à poser</th><th class="nr">Essais conformes</th><th class="nr">Regards GC</th>
@@ -2889,7 +3024,7 @@ function pgDG(){
       <td><span class="kb ${l.z==='Ouest'?'bbl':'bg'}" style="font-size:10px">${l.z}</span></td>
       <td class="nr">${fmt(l.tot)}</td>
       <td class="nr lot-detail" style="${lotDetailStyle}">${rawCell(lBar,lBarRet)}</td>
-      <td class="nr lot-detail" style="${lotDetailStyle}">${rawCell(c.s,lSoudRet)}</td>
+      ${weldingVisible()?`<td class="nr lot-detail" style="${lotDetailStyle}">${rawCell(c.s,lSoudRet)}</td>`:''}
       <td class="nr lot-detail" style="${lotDetailStyle}">${rawCell(c.f,lFouRet)}</td>
       <td class="nr lot-detail" style="${lotDetailStyle}">${rawCell(c.r,lPoseRet)}</td>
       <td class="nr">${poseCell}</td><td class="nr">${resteCell}</td><td class="nr">${essaisCell}</td><td class="nr">${gcCell}</td>
@@ -2903,7 +3038,7 @@ function pgDG(){
   h+=`<tr style="font-weight:700;border-top:2px solid #cbd5e1;background:#f1f5f9">
     <td colspan="3">TOTAL PROJET</td><td class="nr">${fmt(tP)}</td>
     <td class="nr lot-detail" style="${lotDetailStyle}">${fmt(Math.round(lotTotals.barRaw))}</td>
-    <td class="nr lot-detail" style="${lotDetailStyle}">${fmt(Math.round(lotTotals.soudRaw))}</td>
+    ${weldingVisible()?`<td class="nr lot-detail" style="${lotDetailStyle}">${fmt(Math.round(lotTotals.soudRaw))}</td>`:''}
     <td class="nr lot-detail" style="${lotDetailStyle}">${fmt(Math.round(lotTotals.fouilleRaw))}</td>
     <td class="nr lot-detail" style="${lotDetailStyle}">${fmt(Math.round(lotTotals.poseRaw))}</td>
     <td class="nr"><span style="color:${cP(totalPosePct)};font-size:11px">${fmt(lotTotals.poseRetenue)}</span><div style="font-size:10px;font-weight:600;color:${cP(totalPosePct)};margin-top:2px">${totalPosePct.toFixed(1)}%</div></td>
@@ -2949,14 +3084,14 @@ function pgDG(){
       mobilisation:100,
       topographie:zPct(zTopoLength),
       bardage:zPct(zRet.bar),
-      assemblage:zPct(zRet.soud),
+      assemblage:materialTracking()?pc(zRet.soud,pehdLength(locs)):zPct(zRet.soud),
       ouverture:zPct(zRet.fou),
       fermeture:zPosePct,
       gc:zRegPrevu>0?Math.min(100,zRegProgress/zRegPrevu*100):0,
       essais:zPct(zRet.ess),
       rincage:zPct(zRdLength)
     };
-    const zIndice=Object.keys(PHYSICAL_WEIGHTS).reduce((s,k)=>s+PHYSICAL_WEIGHTS[k]*(zRates[k]||0)/100,0);
+    const zIndice=materialTracking()?materialSummary(locs,cu).index:Object.keys(PHYSICAL_WEIGHTS).reduce((s,k)=>s+PHYSICAL_WEIGHTS[k]*(zRates[k]||0)/100,0);
     const zConstraints=structuredConstraints.filter(x=>(x.localite==='tous'||locs.some(l=>l.id===x.localite))&&x.statut==='en_cours').length+
       legacyConstraints.filter(x=>(x.localite==='tous'||locs.some(l=>l.id===x.localite))&&x.statut!=='resolu'&&!migratedLegacyIds.has(x.id)).length;
     const remainingLots=locs.map(l=>{
@@ -2981,7 +3116,7 @@ function pgDG(){
       </div>
       <div style="font-size:12px;color:#5a6778;margin-bottom:10px">${locs.length} localités · ${fmt(zP)} ml de référence</div>
       <div class="kr" style="margin-bottom:8px">
-        <div class="kc"><div class="kl">Soudure retenue</div><div class="kv" style="font-size:16px">${fmt(zRet.soud)} ml</div>${bar(zRates.assemblage)}</div>
+        ${weldingVisible(locs)?`<div class="kc"><div class="kl">Soudure PEHD retenue</div><div class="kv" style="font-size:16px">${fmt(zRet.soud)} ml</div>${bar(zRates.assemblage)}</div>`:''}
         <div class="kc"><div class="kl">Fouille retenue</div><div class="kv" style="font-size:16px">${fmt(zRet.fou)} ml</div>${bar(zRates.ouverture)}</div>
         <div class="kc"><div class="kl">Essais conformes</div><div class="kv" style="font-size:16px">${fmt(zRet.ess)} ml</div>${bar(zRates.essais)}</div>
       </div>
@@ -2997,7 +3132,7 @@ function pgDG(){
 
   // Safe mode toggle
   const alerts=checkCoherence(cumul('9999-12-31'));
-  if(alerts.length){
+  if(alerts.length&&!materialTracking()){
     h+=`<div style="display:flex;align-items:center;gap:10px;margin-top:16px">
       <label style="font-size:12px;color:#5a6778;display:flex;align-items:center;gap:6px;cursor:pointer">
         <input type="checkbox" ${safeMode?'checked':''} onchange="safeMode=this.checked;draw()" style="width:16px;height:16px">
@@ -3058,7 +3193,7 @@ function mkDGCharts(){
       const[yy,mm]=m.split('-').map(Number);
       const finMois=new Date(yy,mm,0).toISOString().slice(0,10);
       const cuM=cumul(finMois);
-      reelContinuityData.push(+indiceContinuite(cuM).toFixed(1));
+      reelContinuityData.push(continuityVisible()?+indiceContinuite(cuM).toFixed(1):null);
       return +avancementGlobal(cuM).toFixed(1);
     });
     // Note méthodologique : écart maximal entre l'indice V2 et l'indice de continuité
@@ -3095,10 +3230,11 @@ function mkDGCharts(){
           borderColor:'#2c7be5',backgroundColor:'transparent',fill:false,spanGaps:false,
           pointBackgroundColor:'#2c7be5',pointRadius:4,pointHoverRadius:6,
           borderWidth:2,tension:0,hidden:!DG_SHOW_OPERATIONAL},
-        {label:'Indice de continuité — méthode des attachements',data:reelContinuityData,
+        ...(materialTracking()?[{label:'Indice physique prévu',data:buildPlannedCurve(xMonths),borderColor:'#2563eb',borderDash:[5,5],pointRadius:3,tension:0,hidden:!DG_SHOW_OPERATIONAL}]:[]),
+        ...(continuityVisible()?[{label:'Indice de continuité — méthode des attachements',data:reelContinuityData,
           borderColor:'#5a6778',backgroundColor:'transparent',fill:false,spanGaps:false,
           pointBackgroundColor:'#5a6778',pointRadius:3,pointHoverRadius:6,
-          borderWidth:2,borderDash:[2,4],tension:0},
+          borderWidth:2,borderDash:[2,4],tension:0}]:[]),
         {label:activePlanningVersion()?.label||'Planning contractuel initial',data:objData,
           borderColor:'#f59e0b',backgroundColor:'transparent',fill:false,
           pointBackgroundColor:'#f59e0b',pointRadius:3,pointHoverRadius:7,
@@ -3106,7 +3242,7 @@ function mkDGCharts(){
       ]
     },options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{position:'top',labels:{font:{family:'DM Sans',size:12},boxWidth:14,usePointStyle:true,
-          filter:item=>DG_SHOW_OPERATIONAL||item.text!=='Indice opérationnel interne'}},
+          filter:item=>DG_SHOW_OPERATIONAL||!['Indice opérationnel interne','Indice physique prévu'].includes(item.text)}},
         tooltip:{callbacks:{
           label:c=>{
             const value=+c.parsed.y||0;
@@ -3169,6 +3305,7 @@ window.exportConstraintsPDF=exportConstraintsPDF;
 
 // D2: Export Excel cumul détaillé format attachement quantitatif
 function exportExcelCumul(){
+  if(materialTracking())return exportMaterialCumul();
   let cu=cumul('9999-12-31');
   if(safeMode)cu=safeCumul(cu);
   
@@ -3343,13 +3480,15 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.2 — Base centrale Supabase · écritures confirmées et contrôle de version (03/09/2026)',
+      version_app:'2.3 — Suivi PEHD/PVC par sous-tronçon ; compatibilité historique' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
       nb_aleas:aleas.length
     },
     parametres:{
+      materialTracking:PROJECT_CONFIG.materialTracking||0,
+      weights:{...PHYSICAL_WEIGHTS},
       DATE_FIN_OBJECTIF:contractPlanningDeadline(),
       pilotage:getPilotageSettings(),
       ETAT_INITIAL_DATE,
@@ -4052,6 +4191,7 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f9fb;color:#2d3748
 .param-page{max-width:1500px}.param-page-head,.param-actions,.param-status,.param-section-head,.param-loc-head,.param-zone-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.param-actions{flex-wrap:wrap}.param-status{margin:18px 0 12px;padding:14px 16px;border:1px solid #dbe5f0;border-left:4px solid #64748b;border-radius:10px;background:#fff}.param-status.draft{border-left-color:#f5a623;background:#fffaf2}.param-status>div{display:flex;flex-direction:column}.param-status b{font-size:12px;color:#0f1b2d}.param-status span,.param-status small{font-size:10px;color:#64748b}.param-status label{display:flex;align-items:center;gap:10px;min-width:420px}.param-status label span{white-space:nowrap}.param-status label input{min-width:280px}.param-errors{display:flex;flex-direction:column;gap:3px;margin-bottom:12px;padding:10px 14px;border:1px solid #fecaca;border-radius:9px;background:#fff1f2;color:#b91c1c}.param-errors b{font-size:11px}.param-errors span{font-size:9px;line-height:1.5}.param-tabs{display:flex;gap:6px;margin:0 0 14px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;overflow-x:auto}.param-tabs button{padding:9px 13px;border:0;border-radius:7px;background:transparent;color:#64748b;font:600 10px 'DM Sans';white-space:nowrap;cursor:pointer}.param-tabs button.active{background:#2c7be5;color:#fff;box-shadow:0 3px 9px rgba(44,123,229,.2)}.param-two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}.param-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.param-field{display:flex;flex-direction:column;gap:5px}.param-field>span,.param-loc-head span,.param-finance-ref>span{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#8491a5}.param-field>b{min-height:40px;padding:10px 12px;border:1px solid #e5eaf1;border-radius:7px;background:#f8fafc;font-size:11px;color:#17243a}.param-field small{font-size:8px;color:#8a95a5}.param-finance-ref{display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin-top:14px;padding:12px;border:1px solid #dbeafe;border-radius:9px;background:#f8fbff}.param-finance-ref b{font-size:11px}.param-finance-ref small{font-size:9px;color:#64748b}.param-finance-ref .bt{margin-top:4px}.param-section-head>div:first-child{display:flex;flex-direction:column}.param-section-head>div>span{font-size:10px;color:#64748b}.param-total{display:flex;flex-direction:column;align-items:flex-end}.param-total small{font-size:8px;text-transform:uppercase;color:#8491a5}.param-total b{font:700 18px 'JetBrains Mono';color:#2c7be5}.param-network-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px;margin-top:14px}.param-loc-list{display:flex;flex-direction:column;gap:5px}.param-loc-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:10px 11px;border:1px solid #e3e9f1;border-radius:8px;background:#fff;text-align:left;cursor:pointer}.param-loc-item span{display:flex;flex-direction:column}.param-loc-item b{font-size:11px;color:#152238}.param-loc-item small{font-size:8px;color:#8491a5}.param-loc-item strong{font:600 9px 'JetBrains Mono';color:#64748b}.param-loc-item.active{border-color:#2c7be5;background:#edf5ff;box-shadow:inset 3px 0 #2c7be5}.param-loc-detail{min-width:0;padding-left:14px;border-left:1px solid #e5eaf1}.param-loc-head{display:grid;grid-template-columns:1fr 1fr 160px;margin-bottom:10px;padding:11px;border-radius:9px;background:#f8fafc}.param-loc-head>div{display:flex;flex-direction:column;gap:4px}.param-loc-head b{font-size:12px}.param-zone-card{margin-bottom:9px;border:1px solid #e3e9f1;border-radius:9px;overflow:hidden}.param-zone-head{padding:8px 10px;background:#f8fafc}.param-zone-head b{font-size:10px}.param-zone-head span{margin-left:auto;font:600 9px 'JetBrains Mono';color:#64748b}.param-zone-head .bt{padding:5px 9px}.param-dn-grid{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;padding:10px}.param-dn-grid label{display:flex;align-items:center;gap:5px;padding:7px;border:1px solid #eef1f5;border-radius:7px}.param-dn-grid label b{margin-left:auto;font:600 10px 'JetBrains Mono'}.param-dn-grid input{width:90px;padding:6px;border:1px solid #ccd6e3;border-radius:5px;text-align:right;font:500 10px 'JetBrains Mono'}.param-dn-grid label button{width:22px;height:22px;border:0;border-radius:4px;background:#fee2e2;color:#b91c1c;cursor:pointer}.dn-tag{padding:3px 5px;border-left:3px solid #64748b;border-radius:3px;background:#f8fafc;font:600 8px 'JetBrains Mono';white-space:nowrap}.param-regard-list,.param-weight-list,.param-readonly-list{display:flex;flex-direction:column;gap:6px}.param-regard-list label,.param-weight-list label,.param-readonly-list>div{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #edf0f4;border-radius:7px;background:#fafbfc}.param-regard-list span,.param-weight-list span,.param-readonly-list b{font-size:10px}.param-regard-list b,.param-weight-list b,.param-readonly-list span{font:600 9px 'JetBrains Mono';color:#64748b}.param-regard-list input,.param-weight-list input{width:95px;padding:6px;border:1px solid #ccd6e3;border-radius:5px;text-align:right;font:500 10px 'JetBrains Mono'}.param-empty{padding:30px;text-align:center;color:#8491a5;font-size:10px}
 .param-add-front{width:100%;padding:10px;border:1px dashed #2c7be5;border-radius:8px;background:#f7fbff;color:#2c7be5;font:700 10px 'DM Sans';cursor:pointer}.param-add-front:hover{background:#eaf4ff}.param-structure-actions{grid-column:1/-1;display:flex!important;flex-direction:row!important;justify-content:flex-end;gap:7px;padding-top:8px;border-top:1px solid #e5eaf1}.param-danger,.param-zone-delete{border:1px solid #fecaca;border-radius:6px;background:#fff1f2;color:#b91c1c;font:700 9px 'DM Sans';cursor:pointer}.param-danger{padding:6px 9px}.param-zone-delete{width:28px;height:27px;font-size:14px}.param-danger:disabled,.param-zone-delete:disabled{border-color:#e5e7eb;background:#f3f4f6;color:#9ca3af;cursor:not-allowed}.param-zone-name{min-width:180px;padding:6px 8px;border:1px solid #ccd6e3;border-radius:6px;background:#fff;font:600 10px 'DM Sans';color:#17243a}.saisie-legacy-note{margin:0 0 12px;border-left:4px solid #f5a623;background:#fffaf0}.prep-loc{margin-top:10px;padding:12px;border:1px solid #e6ebf2;border-radius:10px;background:#fff}.prep-loc-head{display:grid;grid-template-columns:minmax(180px,1fr) minmax(240px,360px) auto;align-items:end;gap:14px;margin-bottom:10px}.prep-loc-head>div{display:flex;flex-direction:column}.prep-loc-head b{font-size:12px;color:#0f1b2d}.prep-loc-head span,.prep-loc-head small{font-size:9px;color:#7d8999}.prep-loc-head label{display:flex;flex-direction:column;gap:4px}.prep-loc-head label input{width:100%}.prep-loc-head>small{padding-bottom:8px}.prep-zone{margin-top:8px;overflow-x:auto}.prep-table{min-width:620px;margin-top:3px}.prep-table td:nth-child(n+2),.prep-table th:nth-child(n+2){text-align:right}.prep-table input{margin-left:auto}
 
+.material-selector{display:flex;align-items:center;gap:8px;font-size:12px}.material-selector .fi{width:155px;min-width:110px;margin:0;font-size:12px;padding:6px}.material-tag{font-size:12px;font-weight:600;color:#173657}.pvc-production .weld-cell{display:none!important}.param-zone-head{flex-wrap:wrap}
 /* Print */
 @media print{
   body{background:#fff!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
