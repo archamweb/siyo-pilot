@@ -540,54 +540,41 @@ function configuredPlanningCurve(kind,months,cfg=PROJECT_CONFIG){
   return months.map(month=>{const row=rows.find(r=>r.month===month);if(row){const value=kind==='pose'?row.pose:row.global;if(value!==''&&value!==null&&value!==undefined&&Number.isFinite(+value))last=Math.max(0,Math.min(100,+value));}return+last.toFixed(2);});
 }
 function contractPlanningDeadline(cfg=PROJECT_CONFIG){return activePlanningVersion(cfg)?.deadline||cfg?.identity?.targetDate||'';}
-function buildPlannedCurve(months){
-  const configured=configuredPlanningCurve('global',months);if(configured)return configured;
-  if(materialTracking())return months.map(()=>null);
-  const coefLots={};LOC.forEach(l=>{coefLots[l.id]=coefLot(l);});
-  const tPglob=LOC.reduce((s,l)=>s+l.tot,0);
-  const monthly={};
-  PLAN_TASKS.forEach(t=>{
-    const lot=LOC.find(l=>l.id===t.lot);if(!lot)return;
-    if(t.act==='gc'&&lot.regards===0)return;
-    // Déterminer le "total couvert" par cette tâche
-    // Pour une tâche sur une zone spécifique : zone.tot
-    // Pour une tâche lot-wide (sans zone) : lot.tot
-    let couv=lot.tot;
-    if(t.zone){
-      const zn=lot.zones.find(z=>z.zid===t.zone);
-      couv=zn?zn.tot:lot.tot;
-    }
-    const d0=new Date(t.d0),d1=new Date(t.d1);
-    let days=Math.round((d1-d0)/86400000);if(days<=0)days=1;
-    let contribTotal=0;
-    if(t.act==='pose'){
-      // Pose DN : 3 activités (soud+fou+rem) coef 2 chacune = 6
-      // Contribution = 6 × ml_tache / (coef_lot × tPglob) × 100
-      contribTotal=6*(t.ml||0)/coefLots[t.lot]/tPglob*100;
-    } else if(t.act==='bar'||t.act==='ess'){
-      // Bardage/Essai : contribution = coef × ml_tache / (coef_lot × tPglob) × 100
-      // ml_tache = couverture de la tâche (zone ou lot entier)
-      contribTotal=ACTIV[t.act].coef*(t.ml||0)/coefLots[t.lot]/tPglob*100;
-    } else if(t.act==='imp'){
-      // Implantation : contribution = coef × couv / (coef_lot × tPglob) × 100
-      contribTotal=ACTIV.imp.coef*couv/coefLots[t.lot]/tPglob*100;
-    } else if(t.act==='rec'){
-      // Plan récolement : 1 fois pour tout le lot
-      contribTotal=ACTIV.rec.coef*lot.tot/coefLots[t.lot]/tPglob*100;
-    } else if(t.act==='gc'){
-      // Regards : 1 fois pour tout le lot si applicable
-      contribTotal=ACTIV.gc.coef*lot.tot/coefLots[t.lot]/tPglob*100;
-    }
-    const contribParJour=contribTotal/days;
-    let cur=new Date(d0);
-    while(cur<d1){
-      const m=cur.toISOString().slice(0,7);
-      monthly[m]=(monthly[m]||0)+contribParJour;
-      cur.setDate(cur.getDate()+1);
-    }
+// Objectif global explicite : aucune substitution par la pose ou par les
+// anciens coefficients des attachements. Les données enregistrées sont conservées.
+function globalPlanningPoints(cfg=PROJECT_CONFIG){
+  const plan=activePlanningVersion(cfg),rows=[...(plan?.rows||[])].sort((a,b)=>String(a.month).localeCompare(String(b.month)));
+  if(!rows.length)return[];
+  let previous=-1;const seen=new Set();
+  for(const row of rows){
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(row.month||'')||seen.has(row.month)||row.global===null||row.global===undefined||String(row.global).trim()===''||!Number.isFinite(+row.global)||+row.global<previous||+row.global>100||+row.global<0)return[];
+    seen.add(row.month);previous=+row.global;
+  }
+  const points=rows.map(row=>{
+    const [year,month]=row.month.split('-').map(Number);
+    const date=plan.deadline?.slice(0,7)===row.month?plan.deadline:new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);
+    return{x:Date.parse(date+'T00:00:00Z'),y:+row.global,date};
   });
-  let cum=0;
-  return months.map(m=>{cum+=(monthly[m]||0);return +(Math.min(cum,100)).toFixed(1);});
+  const start=cfg.identity?.startDate||rows[0].month+'-01';
+  const anchor=Date.parse(start+'T00:00:00Z')-86400000;
+  if(!Number.isFinite(anchor)||points.some(p=>!Number.isFinite(p.x))||anchor>=points[0].x)return[];
+  return[{x:anchor,y:0,date:new Date(anchor).toISOString().slice(0,10)},...points];
+}
+function plannedGlobalAtDate(date,cfg=PROJECT_CONFIG){
+  const points=globalPlanningPoints(cfg),time=Date.parse(date+'T00:00:00Z');
+  if(!points.length||!Number.isFinite(time))return null;
+  if(time<=points[0].x)return 0;
+  for(let i=1;i<points.length;i++){
+    const a=points[i-1],b=points[i];
+    if(time<=b.x)return a.y+(b.y-a.y)*(time-a.x)/(b.x-a.x);
+  }
+  return points.at(-1).y;
+}
+function buildPlannedCurve(months){
+  return months.map(month=>{
+    const [year,m]=month.split('-').map(Number),date=new Date(Date.UTC(year,m,0)).toISOString().slice(0,10);
+    const value=plannedGlobalAtDate(date);return value===null?null:+value.toFixed(2);
+  });
 }
 
 // Courbe d'objectif PHYSIQUE : uniquement le cycle de pose achevé, représenté
@@ -1248,7 +1235,6 @@ function canWrite(){return isAdminUser()||['direction','chef_projet','agent','co
 function refreshUserContext(){const m=MEMBERSHIPS.find(x=>x.project_id===ACTIVE_PROJECT_ID);const role=m?.role||(isAdminUser()?'admin':'visiteur');CURRENT_USER_CONTEXT={role,label:ROLE_LABELS[role]||role};}
 let DG_ACT_PIVOT='r'; // Activité affichée dans le tableau pivot mensuel par localité: s/f/r/ess
 let DG_LOC_DETAIL=null; // Localité ouverte en détail (drill-down), null = fermé
-let DG_SHOW_OPERATIONAL=false; // Lecture interne optionnelle, masquée par défaut
 let DG_SHOW_LOT_DETAILS=false; // Colonnes techniques du tableau par lot
 const DG_ACTIVITY_LABELS={s:'Soudure',f:'Fouille',r:'Pose',ess:'Essai'};
 const DG_ACTIVITY_TITLES={s:'Soudure',f:'Fouille',r:'Pose de conduite',ess:'Essai de pression'};
@@ -1396,9 +1382,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.2</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.2</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -1455,13 +1441,13 @@ function beginPlanningRevision(){
   const current=draftPlanningVersion();if(current&&!current.locked)return;
   const reason=cleanText(prompt('Motif du planning révisé :')||'',180);if(!reason)return;
   const id=`revision-${Date.now()}`,version={id,label:`Planning révisé — ${new Date().toLocaleDateString('fr-FR')}`,reason,createdAt:new Date().toISOString(),locked:false,deadline:current?.deadline||PARAM_DRAFT.identity?.targetDate||'',rows:cloneProjectConfig(current?.rows||[])};
-  PARAM_DRAFT.planning.revisions.push(version);PARAM_DRAFT.planning.active=id;saveProjectDraft();draw();
+  PARAM_DRAFT.planning.revisions.push(version);PARAM_DRAFT.planning.active=id;PARAM_DRAFT.planning.mode='manual';saveProjectDraft();draw();
 }
 function planningMonthRange(start,end){if(!/^\d{4}-\d{2}$/.test(start||'')||!/^\d{4}-\d{2}$/.test(end||'')||start>end)return[];const out=[];let[y,m]=start.split('-').map(Number),[ey,em]=end.split('-').map(Number),guard=0;while((y<ey||(y===ey&&m<=em))&&guard++<240){out.push(`${y}-${String(m).padStart(2,'0')}`);m++;if(m>12){m=1;y++;}}return out;}
-function syncPlanningMonths(silent=false){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked){if(!silent)alert('Ouvrez une révision du paramétrage pour modifier le planning.');return false;}version.rows=Array.isArray(version.rows)?version.rows:[];const start=(PARAM_DRAFT.identity?.startDate||'').slice(0,7),end=(version.deadline||PARAM_DRAFT.identity?.targetDate||'').slice(0,7),months=planningMonthRange(start,end);if(!months.length){if(!version.rows.length)version.rows.push({month:start||today().slice(0,7),global:'',pose:''});if(!silent)alert('Renseignez une date de démarrage et une échéance cohérente pour générer automatiquement tous les mois.');saveProjectDraft();return false;}const byMonth=new Map(version.rows.map(r=>[r.month,r]));months.forEach(month=>{if(!byMonth.has(month))version.rows.push({month,global:'',pose:''});});version.rows.sort((a,b)=>a.month.localeCompare(b.month));saveProjectDraft();if(!silent){draw();toast(`${months.length} mois contractuels affichés`);}return true;}
-function addPlanningRow(){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked){alert('Ouvrez une révision du paramétrage pour ajouter un mois.');return;}version.rows=Array.isArray(version.rows)?version.rows:[];const valid=version.rows.map(r=>r.month).filter(m=>/^\d{4}-\d{2}$/.test(m)).sort(),last=valid.at(-1)||PARAM_DRAFT.identity?.startDate?.slice(0,7)||today().slice(0,7);let[y,m]=last.split('-').map(Number);if(valid.length){m++;if(m>12){m=1;y++;}}version.rows.push({month:`${y}-${String(m).padStart(2,'0')}`,global:'',pose:''});version.rows.sort((a,b)=>a.month.localeCompare(b.month));saveProjectDraft();draw();}
-function stagePlanningValue(index,key,value){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked||!version.rows[index]||!['global','pose'].includes(key))return;version.rows[index][key]=value===''?'':Number(value);saveProjectDraft();}
-function setPlanningRow(index,key,value){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked||!version.rows[index])return;version.rows[index][key]=key==='month'?value:(value===''?'':Number(value));version.rows.sort((a,b)=>a.month.localeCompare(b.month));saveProjectDraft();draw();}
+function syncPlanningMonths(silent=false){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked){if(!silent)alert('Ouvrez une révision du paramétrage pour modifier le planning.');return false;}version.rows=Array.isArray(version.rows)?version.rows:[];const start=(PARAM_DRAFT.identity?.startDate||'').slice(0,7),end=(version.deadline||PARAM_DRAFT.identity?.targetDate||'').slice(0,7),months=planningMonthRange(start,end);if(!months.length){if(!version.rows.length)version.rows.push({month:start||today().slice(0,7),global:''});if(!silent)alert('Renseignez une date de démarrage et une échéance cohérente pour générer automatiquement tous les mois.');saveProjectDraft();return false;}const byMonth=new Map(version.rows.map(r=>[r.month,r]));months.forEach(month=>{if(!byMonth.has(month))version.rows.push({month,global:''});});version.rows.sort((a,b)=>a.month.localeCompare(b.month));saveProjectDraft();if(!silent){draw();toast(`${months.length} mois contractuels affichés`);}return true;}
+function addPlanningRow(){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked){alert('Ouvrez une révision du paramétrage pour ajouter un mois.');return;}version.rows=Array.isArray(version.rows)?version.rows:[];const valid=version.rows.map(r=>r.month).filter(m=>/^\d{4}-\d{2}$/.test(m)).sort(),last=valid.at(-1)||PARAM_DRAFT.identity?.startDate?.slice(0,7)||today().slice(0,7);let[y,m]=last.split('-').map(Number);if(valid.length){m++;if(m>12){m=1;y++;}}version.rows.push({month:`${y}-${String(m).padStart(2,'0')}`,global:''});version.rows.sort((a,b)=>a.month.localeCompare(b.month));saveProjectDraft();draw();}
+function stagePlanningValue(index,key,value){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked||!version.rows[index]||key!=='global')return;version.rows[index][key]=value===''?'':Number(value);saveProjectDraft();}
+function setPlanningRow(index,key,value){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked||!version.rows[index]||!['month','global'].includes(key))return;version.rows[index][key]=key==='month'?value:(value===''?'':Number(value));version.rows.sort((a,b)=>a.month.localeCompare(b.month));saveProjectDraft();draw();}
 function removePlanningRow(index){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked)return;version.rows.splice(index,1);saveProjectDraft();draw();}
 function setPlanningDeadline(value){const version=draftPlanningVersion();if(!PARAM_DRAFT||!version||version.locked)return;version.deadline=value;saveProjectDraft();syncPlanningMonths(true);draw();}
 window.beginProjectRevision=beginProjectRevision;window.cancelProjectRevision=cancelProjectRevision;window.projectDraftSet=projectDraftSet;window.projectDraftReason=projectDraftReason;window.projectDraftLocality=projectDraftLocality;window.projectDraftDn=projectDraftDn;window.stageProjectDn=stageProjectDn;window.addProjectDn=addProjectDn;window.removeProjectDn=removeProjectDn;window.addProjectFront=addProjectFront;window.removeProjectFront=removeProjectFront;window.addProjectZone=addProjectZone;window.projectDraftZoneName=projectDraftZoneName;window.removeProjectZone=removeProjectZone;window.projectDraftWeight=projectDraftWeight;window.beginPlanningRevision=beginPlanningRevision;window.addPlanningRow=addPlanningRow;window.syncPlanningMonths=syncPlanningMonths;window.stagePlanningValue=stagePlanningValue;window.setPlanningRow=setPlanningRow;window.removePlanningRow=removePlanningRow;window.setPlanningDeadline=setPlanningDeadline;
@@ -1472,7 +1458,23 @@ function projectConfigErrors(cfg){
   (cfg.localities||[]).forEach(l=>{if(ids.has(l.id))errors.push(`Identifiant dupliqué : ${l.id}.`);ids.add(l.id);if(!l.nm?.trim()||!l.z?.trim())errors.push(`Localité incomplète : ${l.id}.`);if(!(l.zones||[]).length)errors.push(`${l.nm} ne contient aucun tronçon.`);(l.zones||[]).forEach(z=>{if(!Object.keys(z.dn||{}).length)errors.push(`${l.nm} / ${z.nm||z.zid} : aucun DN.`);Object.entries(z.dn||{}).forEach(([dn,v])=>{if(+v<0)errors.push(`${l.nm} / DN ${dn} : linéaire négatif.`);});});});
   if(!Number.isFinite(weightTotal)||Object.values(cfg.weights||{}).some(v=>!Number.isFinite(+v)||+v<0)||Math.abs(weightTotal-100)>.01)errors.push(`La pondération physique totalise ${weightTotal.toFixed(2)} % au lieu de 100 %.`);
   const plan=activePlanningVersion(cfg),rows=[...(plan?.rows||[])].sort((a,b)=>a.month.localeCompare(b.month));
-  if(cfg.planning?.mode==='manual'){if(!rows.length)errors.push('Le planning contractuel doit contenir au moins un mois.');else{let pg=-1,pp=-1;const seen=new Set();rows.forEach(r=>{if(!/^\d{4}-\d{2}$/.test(r.month||''))errors.push('Le mois du planning est invalide.');if(seen.has(r.month))errors.push(`Le mois ${r.month} apparaît deux fois dans le planning.`);seen.add(r.month);if(['global','pose'].some(k=>r[k]===null||r[k]===undefined||!Number.isFinite(+r[k])||+r[k]<0||+r[k]>100))errors.push(`Planning ${r.month} : valeurs requises entre 0 et 100.`);if(r.global===''||r.pose==='')errors.push(`Planning ${r.month} : les deux pourcentages sont obligatoires.`);if(+r.global<pg)errors.push(`Planning global décroissant en ${r.month}.`);if(+r.pose<pp)errors.push(`Planning de pose décroissant en ${r.month}.`);pg=+r.global;pp=+r.pose;});if(Math.abs(pg-100)>.01)errors.push('Le planning physique global doit se terminer à 100 %.');if(Math.abs(pp-100)>.01)errors.push('Le planning de pose doit se terminer à 100 %.');}if(!plan?.deadline)errors.push('L’échéance du planning contractuel est obligatoire.');if(plan?.deadline&&rows.length&&rows.at(-1).month!==plan.deadline.slice(0,7))errors.push('La dernière ligne du planning doit correspondre au mois de son échéance.');if(cfg.identity?.startDate&&plan?.deadline&&plan.deadline<cfg.identity.startDate)errors.push('L’échéance contractuelle ne peut pas précéder la date de démarrage.');}
+  if(cfg.planning?.mode==='manual'||rows.length){
+    if(!rows.length)errors.push('Le planning global doit contenir au moins un mois.');
+    else{
+      let previous=-1;const seen=new Set();
+      rows.forEach(r=>{
+        if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(r.month||''))errors.push('Le mois du planning est invalide.');
+        if(seen.has(r.month))errors.push(`Le mois ${r.month} apparaît deux fois dans le planning.`);seen.add(r.month);
+        if(r.global===null||r.global===undefined||String(r.global).trim()===''||!Number.isFinite(+r.global)||+r.global<0||+r.global>100)errors.push(`Planning ${r.month} : avancement global requis entre 0 et 100.`);
+        if(+r.global<previous)errors.push(`Planning global décroissant en ${r.month}.`);previous=+r.global;
+      });
+      if(Math.abs(previous-100)>.01)errors.push('Le planning physique global doit se terminer à 100 %.');
+    }
+    if(!plan?.deadline)errors.push('L’échéance du planning est obligatoire.');
+    if(plan?.deadline&&rows.length&&rows.at(-1).month!==plan.deadline.slice(0,7))errors.push('La dernière ligne du planning doit correspondre au mois de son échéance.');
+    if(cfg.identity?.startDate&&rows.length&&rows[0].month<cfg.identity.startDate.slice(0,7))errors.push('Le planning ne peut pas commencer avant le mois de démarrage.');
+    if(cfg.identity?.startDate&&plan?.deadline&&plan.deadline<cfg.identity.startDate)errors.push('L’échéance du planning ne peut pas précéder la date de démarrage.');
+  }
   if(materialTracking(cfg)){
     for(const l of cfg.localities||[]){const seen=new Set();for(const z of l.zones||[]){
       if(seen.has(z.zid))errors.push('Identifiant de sous-tronçon dupliqué : '+z.zid);seen.add(z.zid);
@@ -1533,16 +1535,19 @@ function renderParamRules(cfg){
   return`<div class="param-two-col"><div class="cd"><div class="param-section-head"><div><div class="ct">Pondération physique interne</div><span>Visible uniquement par le Chef de projet.</span></div><span class="kb ${Math.abs(total-100)<.01?'bg':'br'}">Total ${total.toFixed(2)} %</span></div><div class="param-weight-list">${Object.entries(labels).map(([k,l])=>`<label><span>${l}</span>${PARAM_DRAFT?`<input type="number" min="0" step="0.01" value="${cfg.weights[k]||0}" onchange="projectDraftWeight('${k}',this.value)">`:`<b>${(+cfg.weights[k]||0).toFixed(2)} %</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Grille interne des regards</div><div class="param-readonly-list">${Object.values(GC_STAGES).map(s=>`<div><b>${s.label}</b><span>${Math.round(s.progress*100)} % du regard</span></div>`).join('')}</div><div class="saisie-note">Cette grille n’est pas affichée dans le tableau de bord public ; elle reste consultable ici pour rendre le calcul auditable.</div></div></div>`;
 }
 function renderParamPlanning(cfg){
-  const plan=activePlanningVersion(cfg),editable=!!PARAM_DRAFT&&!plan?.locked;if(editable&&!(plan?.rows||[]).length)syncPlanningMonths(true);const rows=[...(plan?.rows||[])].sort((a,b)=>a.month.localeCompare(b.month)),versions=[cfg.planning?.initial,...(cfg.planning?.revisions||[])].filter(Boolean);
-  return`<div class="cd param-planning"><div class="param-section-head"><div><div class="ct">Planning contractuel d’avancement</div><span>Saisissez, mois par mois, les deux pourcentages cumulés approuvés dans le planning transmis au client.</span></div><div class="planning-actions">${PARAM_DRAFT&&plan?.locked?'<button class="bp" onclick="beginPlanningRevision()">+ Créer un planning révisé</button>':''}${editable?'<button class="bt" onclick="syncPlanningMonths()">↻ Afficher les mois du contrat</button><button class="bt" onclick="addPlanningRow()">+ Ajouter un mois exceptionnel</button>':''}</div></div>
-    <div class="planning-version-bar"><div><small>Version active</small><b>${escHtml(plan?.label||'Planning contractuel initial')}</b>${plan?.reason?`<span>Motif : ${escHtml(plan.reason)}</span>`:''}</div><label><span>Échéance contractuelle</span>${editable?`<input class="fi" type="date" value="${plan?.deadline||''}" onchange="setPlanningDeadline(this.value)">`:`<b>${plan?.deadline?fD(plan.deadline):'Non renseignée'}</b>`}</label><span class="kb ${plan?.locked?'bg':'bo'}">${plan?.locked?'Verrouillé':'En préparation'}</span></div>
-    ${rows.length?`<div class="planning-instruction"><b>Mode d’emploi</b><span>Chaque ligne correspond à la fin du mois. Les valeurs doivent progresser sans diminuer et la dernière ligne doit atteindre 100 % dans les deux colonnes.</span></div><div class="planning-table-wrap"><table class="tb planning-table"><thead><tr><th>Mois du planning</th><th>Avancement physique global prévu (%)</th><th>Conduite posée prévue (%)</th>${editable?'<th title="Supprimer un mois">Action</th>':''}</tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${editable?`<input type="month" value="${r.month}" onchange="setPlanningRow(${i},'month',this.value)">`:attachMonthLabel(r.month)}</td><td>${editable?`<div class="planning-percent-input"><input type="number" min="0" max="100" step="0.01" value="${r.global}" placeholder="0 à 100" oninput="stagePlanningValue(${i},'global',this.value)" onchange="draw()"><span>%</span></div>`:`<b>${(+r.global||0).toFixed(1)} %</b>`}</td><td>${editable?`<div class="planning-percent-input"><input type="number" min="0" max="100" step="0.01" value="${r.pose}" placeholder="0 à 100" oninput="stagePlanningValue(${i},'pose',this.value)" onchange="draw()"><span>%</span></div>`:`<b>${(+r.pose||0).toFixed(1)} %</b>`}</td>${editable?`<td><button class="param-zone-delete" title="Supprimer ce mois" onclick="removePlanningRow(${i})">×</button></td>`:''}</tr>`).join('')}</tbody></table></div>`:`<div class="param-empty"><b>Les dates du contrat sont incomplètes.</b><span>Renseignez la date de démarrage et l’échéance contractuelle : le tableau mensuel apparaîtra automatiquement ici.</span></div>`}
-    <div class="planning-legend"><span><i class="plan-global"></i><b>Global :</b> avancement physique complet du projet.</span><span><i class="plan-pose"></i><b>Pose :</b> linéaire de conduite posé. Les deux courbes ne sont pas interchangeables.</span></div>
+  const plan=activePlanningVersion(cfg),editable=!!PARAM_DRAFT&&!plan?.locked;
+  if(editable&&!(plan?.rows||[]).length)syncPlanningMonths(true);
+  const rows=[...(plan?.rows||[])].sort((a,b)=>a.month.localeCompare(b.month)),versions=[cfg.planning?.initial,...(cfg.planning?.revisions||[])].filter(Boolean);
+  const percent=value=>value===null||value===undefined||String(value).trim()===''||!Number.isFinite(+value)?'Non renseigné':Number(value).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' %';
+  return`<div class="cd param-planning"><div class="param-section-head"><div><div class="ct">Planning de référence — avancement physique global</div><span>Saisissez le pourcentage cumulé prévu pour l’ensemble des travaux, avec la même pondération que le réalisé.</span></div><div class="planning-actions">${PARAM_DRAFT&&plan?.locked?'<button class="bp" onclick="beginPlanningRevision()">+ Créer un planning révisé</button>':''}${editable?'<button class="bt" onclick="syncPlanningMonths()">↻ Afficher les mois du planning</button><button class="bt" onclick="addPlanningRow()">+ Ajouter un mois</button>':''}</div></div>
+    <div class="planning-version-bar"><div><small>Version active</small><b>${escHtml(plan?.label||'Planning initial')}</b>${plan?.reason?`<span>Motif : ${escHtml(plan.reason)}</span>`:''}</div><label><span>Échéance du planning</span>${editable?`<input class="fi" type="date" value="${plan?.deadline||''}" onchange="setPlanningDeadline(this.value)">`:`<b>${plan?.deadline?fD(plan.deadline):'Non renseignée'}</b>`}</label><span class="kb ${plan?.locked?'bg':'bo'}">${plan?.locked?'Verrouillé':'En préparation'}</span></div>
+    ${rows.length?`<div class="planning-instruction"><b>Mode d’emploi</b><span>Une seule valeur cumulée par mois, sans diminution. La dernière ligne doit atteindre 100 % à l’échéance du planning ; les autres lignes correspondent à la fin du mois.</span></div><div class="planning-table-wrap"><table class="tb planning-table"><thead><tr><th>Mois du planning</th><th>Avancement physique global prévu (%)</th>${editable?'<th title="Supprimer un mois">Action</th>':''}</tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${editable?`<input type="month" value="${r.month}" onchange="setPlanningRow(${i},'month',this.value)">`:attachMonthLabel(r.month)}</td><td>${editable?`<div class="planning-percent-input"><input type="number" min="0" max="100" step="0.01" value="${r.global??''}" placeholder="0 à 100" oninput="stagePlanningValue(${i},'global',this.value)" onchange="draw()"><span>%</span></div>`:`<b>${percent(r.global)}</b>`}</td>${editable?`<td><button class="param-zone-delete" title="Supprimer ce mois" onclick="removePlanningRow(${i})">×</button></td>`:''}</tr>`).join('')}</tbody></table></div>`:`<div class="param-empty"><b>Aucun objectif physique global renseigné.</b><span>Ouvrez une révision du planning pour renseigner les objectifs globaux et leur échéance.</span></div>`}
+    <div class="planning-legend"><span><i class="plan-global"></i><b>Global :</b> avancement physique complet du projet, comparé au réalisé dans le tableau de bord.</span><span>Le détail de la pose reste disponible dans les KPI.</span></div>
     ${versions.length>1?`<div class="planning-history"><b>Versions conservées</b>${versions.map(v=>`<span>${escHtml(v.label)} · ${v.deadline?fD(v.deadline):'sans échéance'} · ${v.locked?'validée':'brouillon'}</span>`).join('')}</div>`:''}</div>`;
 }
 function renderParamRevisions(cfg){return`<div class="cd"><div class="ct">Historique des révisions du paramétrage</div>${cfg.revisions?.length?`<table class="tb"><thead><tr><th>Date</th><th>Motif</th><th>Auteur</th><th class="nr">Linéaire avant</th><th class="nr">Linéaire après</th></tr></thead><tbody>${[...cfg.revisions].reverse().map(r=>`<tr><td>${fD(r.date.slice(0,10))}</td><td>${escHtml(r.reason)}</td><td>${escHtml(r.author)}</td><td class="nr">${fmt(r.previousTotal)} ml</td><td class="nr">${fmt(r.newTotal)} ml</td></tr>`).join('')}</tbody></table>`:'<div class="param-empty">Aucune révision validée depuis la création de ce registre.</div>'}</div>`;}
 function pgParametrageProjet(){
-  const cfg=activeProjectParamConfig(),editing=!!PARAM_DRAFT;if(editing&&cfg.planning?.mode==='manual'&&!(activePlanningVersion(cfg)?.rows||[]).length)syncPlanningMonths(true);const tabs=[['identity','Identité'],['network','Structure réseau'],['planning','Planning contractuel'],['works','Ouvrages & jalons'],['rules','Méthode de calcul'],['revisions','Révisions']],errors=editing?projectConfigErrors(cfg).filter(e=>!e.startsWith('Le motif')):[];
+  const cfg=activeProjectParamConfig(),editing=!!PARAM_DRAFT;if(editing&&cfg.planning?.mode==='manual'&&!(activePlanningVersion(cfg)?.rows||[]).length)syncPlanningMonths(true);const tabs=[['identity','Identité'],['network','Structure réseau'],['planning','Planning global'],['works','Ouvrages & jalons'],['rules','Méthode de calcul'],['revisions','Révisions']],errors=editing?projectConfigErrors(cfg).filter(e=>!e.startsWith('Le motif')):[];
   let body=PARAM_SECTION==='network'?renderParamNetwork(cfg):PARAM_SECTION==='planning'?renderParamPlanning(cfg):PARAM_SECTION==='works'?renderParamWorks(cfg):PARAM_SECTION==='rules'?renderParamRules(cfg):PARAM_SECTION==='revisions'?renderParamRevisions(cfg):renderParamIdentity(cfg);
   return`<div class="mn param-page"><div class="param-page-head"><div><div class="st" style="margin:0">Paramétrage du projet</div><div class="attach-subtitle">Référentiel technique, contractuel et méthodologique</div></div><div class="param-actions"><span class="kb bbl">Connecté en ${escHtml(CURRENT_USER_CONTEXT.label)}</span>${editing?'<button class="bt" onclick="cancelProjectRevision()">Annuler</button><button class="bp" onclick="validateProjectRevision()">✓ Valider la révision</button>':'<button class="bp" onclick="beginProjectRevision()">✎ Créer une révision</button>'}</div></div>
     <div class="param-status ${editing?'draft':'locked'}"><div><b>${editing?'Révision en préparation':'Paramétrage validé et verrouillé'}</b><span>${editing?'Les changements restent locaux tant qu’ils ne sont pas validés.':'Le projet contient '+dbDates().length+' rapports : toute modification doit être datée et justifiée.'}</span></div>${editing?`<label><span>Motif obligatoire</span><input class="fi" value="${escHtml(cfg._revision?.reason||'')}" placeholder="Ex. révision du linéaire contractuel" oninput="projectDraftReason(this.value)"></label>`:`<small>Dernière validation : ${cfg.validatedAt?fD(cfg.validatedAt.slice(0,10)):'Non renseignée'}</small>`}</div>
@@ -2297,57 +2302,14 @@ function projectionFin(){
   };
 }
 
-// Écart Réel/Objectif physique à date
-// Interpolation linéaire de l'objectif au JOUR du dernier rapport.
-// Exemple : au 17 avril, objectif fin mars=55,9% et fin avril=73,7%
-// → progression intra-avril = 17/30 (jour du mois / jours du mois)
-// → objectif au 17/04 = 55,9% + (73,7% − 55,9%) × 17/30 = 65,9%
-// On compare ensuite ce point à la référence physique réelle.
+// Écart entre le physique global réalisé et le physique global prévu au
+// jour du dernier rapport. Même interpolation que la courbe orange.
 function ecartObjectif(){
-  const cu=cumul('9999-12-31');
-  const pcReel=avancementPhysique(cu);
-  if(PROJECT_CONFIG.planning?.mode==='manual'&&!(activePlanningVersion()?.rows||[]).length)return{pcReel:+pcReel.toFixed(1),pcObjectif:null,ecart:null,critique:false,dateRef:dbDates().sort().at(-1)||null,unavailable:true};
-  const ds=dbDates().sort().reverse();
-  if(!ds.length)return{pcReel:0,pcObjectif:0,ecart:0,critique:false,dateRef:null};
-  const dateRef=ds[0]; // Date du dernier rapport (référence stable)
-  const[yy,mm,jj]=dateRef.split('-').map(Number);
-  // Mois précédent (fin du mois passé = début de l'interpolation)
-  const moisPrec=new Date(yy,mm-2,1).toISOString().slice(0,7);
-  // Mois en cours (fin du mois en cours = fin de l'interpolation)
-  const moisEnCours=new Date(yy,mm-1,1).toISOString().slice(0,7);
-  // Construire la courbe complète depuis décembre 2025 jusqu'au mois en cours
-  const allMonths=[];
-  const firstMonth=activePlanningVersion()?.rows?.[0]?.month||PROJECT_CONFIG.identity?.startDate?.slice(0,7)||'2025-12';
-  const start=new Date(firstMonth+'-01');
-  const end=new Date(yy,mm-1,1); // 1er jour du mois en cours
-  let d=new Date(start);
-  while(d<=end){
-    allMonths.push(d.toISOString().slice(0,7));
-    d.setMonth(d.getMonth()+1);
-  }
-  const curve=buildPhysicalPlannedCurve(allMonths);
-  // Récupérer les 2 valeurs de référence (fin mois précédent et fin mois en cours)
-  const idxPrec=allMonths.indexOf(moisPrec);
-  const idxEnCours=allMonths.indexOf(moisEnCours);
-  const objFinMoisPrec=idxPrec>=0?curve[idxPrec]:0;
-  const objFinMoisEnCours=idxEnCours>=0?curve[idxEnCours]:objFinMoisPrec;
-  // Interpolation linéaire : ratio jour / jours-du-mois
-  const joursDansMois=new Date(yy,mm,0).getDate(); // mm est 1-indexé pour Date(y,m,0) qui donne dernier jour du mois m-1
-  const deadline=contractPlanningDeadline(),endDay=deadline?.slice(0,7)===moisEnCours?+deadline.slice(8):joursDansMois;
-  const startDay=PROJECT_CONFIG.identity?.startDate?.slice(0,7)===moisEnCours?+PROJECT_CONFIG.identity.startDate.slice(8):1;
-  const ratioJour=Math.max(0,Math.min(1,(jj-startDay+1)/Math.max(1,endDay-startDay+1)));
-  const pcObjectif=objFinMoisPrec+(objFinMoisEnCours-objFinMoisPrec)*ratioJour;
-  const ecart=pcObjectif-pcReel; // positif = retard, négatif = avance
-  return{
-    pcReel:+pcReel.toFixed(1),
-    pcObjectif:+pcObjectif.toFixed(1),
-    ecart:+ecart.toFixed(1),
-    critique:ecart>SEUIL_RETARD_CRITIQUE,
-    dateRef,
-    objFinMoisPrec:+objFinMoisPrec.toFixed(1),
-    objFinMoisEnCours:+objFinMoisEnCours.toFixed(1),
-    ratioJour:+(ratioJour*100).toFixed(0)
-  };
+  let cu=cumul('9999-12-31');if(safeMode)cu=safeCumul(cu);
+  const pcReel=avancementGlobal(cu),dateRef=dbDates().sort().at(-1)||null;
+  const pcObjectif=dateRef?plannedGlobalAtDate(dateRef):null;
+  const ecart=pcObjectif===null?null:pcObjectif-pcReel; // positif = retard
+  return{pcReel:+pcReel.toFixed(1),pcObjectif:pcObjectif===null?null:+pcObjectif.toFixed(1),ecart:ecart===null?null:+ecart.toFixed(1),critique:ecart!==null&&ecart>SEUIL_RETARD_CRITIQUE,dateRef,unavailable:pcObjectif===null};
 }
 
 // Tendance 7j vs 7j précédents sur la référence physique remblayée
@@ -2707,20 +2669,6 @@ function toggleDGLocality(localityId){
   refreshMonthlyPivot(DG_LOC_DETAIL!==null);
 }
 
-function toggleDGOperational(){
-  DG_SHOW_OPERATIONAL=!DG_SHOW_OPERATIONAL;
-  const chart=charts.find(c=>c?.canvas?.id==='chDGcurve');
-  if(chart){
-    const index=chart.data.datasets.findIndex(d=>d.label==='Indice opérationnel interne');
-    if(index>=0){chart.data.datasets[index].hidden=!DG_SHOW_OPERATIONAL;const planned=chart.data.datasets.find(d=>d.label==='Indice physique prévu');if(planned)planned.hidden=!DG_SHOW_OPERATIONAL;chart.update();}
-  }
-  const button=document.getElementById('toggle-dg-operational');
-  if(button){
-    button.textContent=DG_SHOW_OPERATIONAL?'Masquer l’indice interne':'Afficher l’indice interne';
-    button.setAttribute('aria-pressed',DG_SHOW_OPERATIONAL?'true':'false');
-  }
-}
-
 function toggleDGLotDetails(){
   DG_SHOW_LOT_DETAILS=!DG_SHOW_LOT_DETAILS;
   document.querySelectorAll('#dg-lot-performance .lot-detail').forEach(cell=>{cell.style.display=DG_SHOW_LOT_DETAILS?'':'none';});
@@ -2963,39 +2911,24 @@ function pgDG(){
   // ── 2. Évolution mensuelle : production et trajectoire répondent à deux
   // questions différentes et sont donc présentées dans deux cartes autonomes.
   const quality=dataQualitySummary(cu);
-  let plannedAtLatest=null;
-  if(dernierRpt){
-    const latestMonth=dernierRpt.slice(0,7);
-    const poseStarts=PLAN_TASKS.filter(t=>t.act==='pose').map(t=>t.d0.slice(0,7)).sort();
-    if(poseStarts.length){
-      const planMonths=[];
-      let cursor=new Date(poseStarts[0]+'-01T00:00:00Z');
-      const limit=new Date(latestMonth+'-01T00:00:00Z');
-      while(cursor<=limit){
-        planMonths.push(cursor.toISOString().slice(0,7));
-        cursor.setUTCMonth(cursor.getUTCMonth()+1);
-      }
-      plannedAtLatest=buildPhysicalPlannedCurve(planMonths).at(-1)??null;
-    }
-  }
-  const physicalAtLatest=synth.rates.fermeture;
+  const plannedAtLatest=dernierRpt?plannedGlobalAtDate(dernierRpt):null;
+  const physicalAtLatest=synth.index;
   const physicalGap=plannedAtLatest===null?null:physicalAtLatest-plannedAtLatest;
-  const physicalGapMl=physicalGap===null?null:physicalGap/100*tP;
   h+=`<div class="st">Évolution mensuelle</div>
   <div class="cd" id="dg-monthly-pivot">${renderMonthlyPivot(cu,mKeys)}</div>
   <div class="cd">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <div class="ct" style="margin:0"><span class="dt" style="background:#36b37e"></span> Trajectoire d'avancement physique</div>
-      <button id="toggle-dg-operational" aria-pressed="${DG_SHOW_OPERATIONAL}" class="no-print" onclick="toggleDGOperational()" style="font-size:10px;padding:5px 10px;border:1px solid #dce1e9;border-radius:6px;background:#f8fafc;color:#5a6778;cursor:pointer">${DG_SHOW_OPERATIONAL?'Masquer l’indice interne':'Afficher l’indice interne'}</button>
+      <div class="ct" style="margin:0"><span class="dt" style="background:#36b37e"></span> Trajectoire d’avancement physique global</div>
     </div>
-    ${continuityVisible()?`<div style="font-size:10px;color:#8a95a5;margin:4px 0 10px 15px">Comparaison de la conduite posée retenue avec le planning contractuel initial. La courbe grise pointillée est l'<b>indice de continuité</b>, calculé avec la méthode des attachements N°01 à N°08 (implantation, bardage, soudure ×2, fouille ×2, pose ×2, essais ½, GC ½, récolement ½) : c'est la lecture comparable aux situations signées. L'indice physique consolidé V2 (pondération à huit composantes adoptée le 31/08/2026) est recalculé sur tout l'historique et ne doit pas être comparé aux attachements.<span id="dg-index-gap"></span></div>`:'<p>Conduite posée et indice physique par matériau comparés à leurs objectifs respectifs. Les objectifs globaux doivent utiliser la même pondération que le réalisé.</p>'}
+    <p style="font-size:11px;color:#64748b;margin:8px 0 12px">Physique global réalisé et prévu, sur le périmètre et la pondération du projet. Le réalisé reprend le KPI « Avancement physique consolidé ».${dernierRpt?' Dernier rapport : '+fD(dernierRpt)+'.':''}</p>
+    ${globalPlanningPoints().length?'':`<div class="planning-instruction"><b>Objectif global à renseigner</b><span>Aucun planning physique global compatible n’est disponible. ${canAccessProjectSetup()?'Renseignez les objectifs dans le paramétrage du planning.':'La direction doit renseigner les objectifs du planning.'}</span></div>`}
     <div class="ch" style="height:300px"><canvas id="chDGcurve"></canvas></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:10px">
-      <div style="padding:9px 11px;background:#ecfdf5;border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Conduite posée retenue</div><b style="color:#15803d">${physicalAtLatest.toFixed(1)}% · ${fmt(synth.totals.rem)} ml</b></div>
-      <div style="padding:9px 11px;background:#fffbeb;border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Planning initial au dernier rapport</div><b style="color:#b45309">${plannedAtLatest===null?'Non calculé':plannedAtLatest.toFixed(1)+'%'}</b></div>
-      <div style="padding:9px 11px;background:${physicalGap!==null&&physicalGap<0?'#fef2f2':'#f0fdf4'};border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Écart au dernier rapport</div><b style="color:${physicalGap!==null&&physicalGap<0?'#dc2626':'#15803d'}">${physicalGap===null?'Non calculé':`${physicalGap>=0?'+':''}${physicalGap.toFixed(1)} pts · ${physicalGapMl>=0?'+':''}${fmt(physicalGapMl)} ml`}</b></div>
+      <div style="padding:9px 11px;background:#ecfdf5;border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Physique global réalisé</div><b style="color:#15803d">${dernierRpt?physicalAtLatest.toFixed(1)+'%':'Aucun rapport'}</b></div>
+      <div style="padding:9px 11px;background:#fffbeb;border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Physique global prévu au dernier rapport</div><b style="color:#b45309">${plannedAtLatest===null?'Non calculé':plannedAtLatest.toFixed(1)+'%'}</b></div>
+      <div style="padding:9px 11px;background:${physicalGap!==null&&physicalGap<0?'#fef2f2':'#f0fdf4'};border-radius:7px"><div style="font-size:9px;text-transform:uppercase;color:#64748b">Écart au dernier rapport</div><b style="color:${physicalGap!==null&&physicalGap<0?'#dc2626':'#15803d'}">${physicalGap===null?'Non calculé':`${physicalGap>=0?'+':''}${physicalGap.toFixed(1)} pts`}</b></div>
     </div>
-    ${quality.ecartPlafonnement>0.05?`<div style="font-size:10px;color:#8a95a5;margin-top:8px;padding:8px 10px;background:#f8fafc;border-radius:7px">Lecture des données : <b>${fmt(quality.remblaiBrut)} ml</b> de pose saisis dans les rapports ; <b>${fmt(quality.remblaiPlafonne)} ml</b> retenus dans la courbe après plafonnement par zone et DN. Écart à analyser : <b style="color:#d97706">${fmt(quality.ecartPlafonnement)} ml</b>.</div>`:''}
+    ${quality.ecartPlafonnement>0.05?`<div style="font-size:10px;color:#8a95a5;margin-top:8px;padding:8px 10px;background:#f8fafc;border-radius:7px">Lecture des données : <b>${fmt(quality.remblaiBrut)} ml</b> de pose saisis dans les rapports ; <b>${fmt(quality.remblaiPlafonne)} ml</b> retenus dans le calcul de la composante pose après plafonnement par zone et DN. Écart à analyser : <b style="color:#d97706">${fmt(quality.ecartPlafonnement)} ml</b>.</div>`:''}
   </div>`;
 
   // ── 3. Avancement par lot ──
@@ -3177,124 +3110,58 @@ function pgDG(){
   return h;
 }
 
+function globalProgressChartData(){
+  const dates=dbDates().sort(),first=dates[0],latest=dates.at(-1),actual=[];
+  if(first&&latest){
+    for(const month of planningMonthRange(first.slice(0,7),latest.slice(0,7))){
+      const [year,m]=month.split('-').map(Number),end=new Date(Date.UTC(year,m,0)).toISOString().slice(0,10);
+      const date=end>latest?latest:end;
+      let cu=cumul(date);if(safeMode)cu=safeCumul(cu);
+      actual.push({x:Date.parse(date+'T00:00:00Z'),y:avancementGlobal(cu),date});
+    }
+  }
+  return{actual,planned:globalPlanningPoints()};
+}
 function mkDGCharts(){
   if(typeof Chart==='undefined'){toast('Graphiques indisponibles : vérifiez la connexion Internet puis rechargez.');return;}
-  let cu=cumul('9999-12-31');
-  if(safeMode)cu=safeCumul(cu);
-  const months=groupByMonth();
-  const mKeys=Object.keys(months).sort();
-  const tP=LOC.reduce((s,l)=>s+l.tot,0);
-
-  // Chart 1: courbes physique, opérationnelle et objectif physique
-  const el1=document.getElementById('chDGcurve');
-  if(el1){
-    // Axe étendu couvrant toute la fenêtre du planning recalé (Jan 2026 → Juil 2026)
-    // + décembre 2025 comme point de départ à 0% (début officiel planning d'origine)
-    const allMonths=new Set([...mKeys]);
-    // Fenêtre recalée (doit matcher buildPlannedCurve)
-    const configuredRows=activePlanningVersion()?.rows||[];
-    const planStart=new Date((configuredRows[0]?.month||PROJECT_CONFIG.identity?.startDate?.slice(0,7)||'2025-12')+'-01');
-    const planDeadline=contractPlanningDeadline();
-    const planEnd=planDeadline?new Date(planDeadline):new Date((mKeys.at(-1)||today().slice(0,7))+'-01');
-    let d=new Date(planStart);
-    while(d<=planEnd){
-      allMonths.add(d.toISOString().slice(0,7));
-      d.setMonth(d.getMonth()+1);d.setDate(1);
-    }
-    const xMonths=[...allMonths].sort();
-    
-    // Courbes réelles à la fin de chaque mois
-    // - Avant la première saisie : 0% (point d'ancrage visuel, démarre bien à 0)
-    // - Mois avec saisies : valeurs réelles
-    // - Après dernier mois saisi : null (pas de ligne vers le futur)
-    const premierMoisSaisi=mKeys[0]; // Plus petit mois contenant des données
-    const dernierMoisSaisi=mKeys[mKeys.length-1];
-    const reelPhysicalData=xMonths.map(m=>{
-      // Mois strictement avant les premières saisies → 0% (démarrage propre)
-      if(!premierMoisSaisi||m<premierMoisSaisi)return null;
-      // Mois strictement après les dernières saisies → null (ligne s'arrête)
-      if(m>dernierMoisSaisi)return null;
-      // Mois courant : calculer la référence physique cumulée à fin de mois
-      const[yy,mm]=m.split('-').map(Number);
-      const finMois=new Date(yy,mm,0).toISOString().slice(0,10);
-      const cuM=cumul(finMois);
-      return +avancementPhysique(cuM).toFixed(1);
-    });
-    const reelContinuityData=[];
-    const reelOperationalData=xMonths.map(m=>{
-      if(!premierMoisSaisi||m<premierMoisSaisi){reelContinuityData.push(null);return null;}
-      if(m>dernierMoisSaisi){reelContinuityData.push(null);return null;}
-      const[yy,mm]=m.split('-').map(Number);
-      const finMois=new Date(yy,mm,0).toISOString().slice(0,10);
-      const cuM=cumul(finMois);
-      reelContinuityData.push(continuityVisible()?+indiceContinuite(cuM).toFixed(1):null);
-      return +avancementGlobal(cuM).toFixed(1);
-    });
-    // Note méthodologique : écart maximal entre l'indice V2 et l'indice de continuité
-    {let gapMax=0,gapMonth='';xMonths.forEach((m,i)=>{const a=reelOperationalData[i],b=reelContinuityData[i];if(a===null||b===null||m<premierMoisSaisi)return;if(Math.abs(a-b)>Math.abs(gapMax)){gapMax=a-b;gapMonth=m;}});
-      const gapEl=document.getElementById('dg-index-gap');if(gapEl)gapEl.textContent=gapMonth?` Écart maximal entre les deux indices : ${gapMax>0?'+':''}${gapMax.toFixed(1)} points (${moisNm(gapMonth)}).`:'';}
-    // Courbe objectif physique : cycle de pose planifié
-    const objData=buildPhysicalPlannedCurve(xMonths);
-    const lastRealIndex=reelPhysicalData.reduce((last,v,i)=>v===null?last:i,-1);
-    const deadlineIndex=planDeadline?xMonths.indexOf(planDeadline.slice(0,7)):-1;
-    const deadlineMarker={
-      id:'contractDeadlineMarker',
-      afterDatasetsDraw(chart){
-        if(deadlineIndex<0)return;
-        const{x,y}=chart.scales;
-        const xPos=x.getPixelForValue(deadlineIndex);
-        const ctx=chart.ctx;
-        ctx.save();
-        ctx.strokeStyle='#b45309';ctx.lineWidth=1;ctx.setLineDash([4,4]);
-        ctx.beginPath();ctx.moveTo(xPos,y.top);ctx.lineTo(xPos,y.bottom);ctx.stroke();
-        ctx.setLineDash([]);ctx.fillStyle='#92400e';ctx.font='10px DM Sans';
-        ctx.textAlign='right';ctx.fillText(`Échéance ${fD(planDeadline).replace(/\s+\d{4}$/,'')}`,xPos-5,y.top+12);
-        ctx.restore();
-      }
-    };
-    
-    charts.push(new Chart(el1,{type:'line',data:{
-      labels:xMonths.map(m=>{const p=moisNm(m).split(' ');return p[0].slice(0,4)+'. '+p[1];}),
-      datasets:[
-        {label:'Avancement physique — conduite posée',data:reelPhysicalData,
-          borderColor:'#36b37e',backgroundColor:'#36b37e22',fill:true,spanGaps:false,
-          pointBackgroundColor:'#36b37e',pointRadius:c=>c.dataIndex===lastRealIndex?6:3,pointHoverRadius:8,
-          borderWidth:3,tension:0},
-        {label:'Avancement global réalisé',data:reelOperationalData,
-          borderColor:'#2c7be5',backgroundColor:'transparent',fill:false,spanGaps:false,
-          pointBackgroundColor:'#2c7be5',pointRadius:4,pointHoverRadius:6,
-          borderWidth:2,tension:0,hidden:!DG_SHOW_OPERATIONAL},
-        ...(materialTracking()?[{label:'Indice physique prévu',data:buildPlannedCurve(xMonths),borderColor:'#2563eb',borderDash:[5,5],pointRadius:3,tension:0,hidden:!DG_SHOW_OPERATIONAL}]:[]),
-        ...(continuityVisible()?[{label:'Indice de continuité — méthode des attachements',data:reelContinuityData,
-          borderColor:'#5a6778',backgroundColor:'transparent',fill:false,spanGaps:false,
-          pointBackgroundColor:'#5a6778',pointRadius:3,pointHoverRadius:6,
-          borderWidth:2,borderDash:[2,4],tension:0}]:[]),
-        {label:'Pose prévue — '+(activePlanningVersion()?.label||'Planning initial'),data:objData,
-          borderColor:'#f59e0b',backgroundColor:'transparent',fill:false,
-          pointBackgroundColor:'#f59e0b',pointRadius:3,pointHoverRadius:7,
-          borderWidth:2,borderDash:[8,4],tension:0},
-      ]
-    },options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{position:'top',labels:{font:{family:'DM Sans',size:12},boxWidth:14,usePointStyle:true,
-          filter:item=>DG_SHOW_OPERATIONAL||!['Avancement global réalisé','Indice physique prévu'].includes(item.text)}},
-        tooltip:{callbacks:{
-          label:c=>{
-            const value=+c.parsed.y||0;
-            const showLength=c.dataset.label==='Avancement physique — conduite posée'||c.dataset.label.startsWith('Pose prévue');
-            return `${c.dataset.label}: ${value.toFixed(1)}%${showLength?' · '+fmt(value/100*tP)+' ml':''}`;
-          },
-          afterBody:items=>{
-            if(!items.length)return'';
-            const i=items[0].dataIndex,actual=reelPhysicalData[i],planned=objData[i];
-            if(actual===null||actual===undefined||planned===null||planned===undefined)return'';
-            const gap=actual-planned;
-            return `Écart physique / planning : ${gap>=0?'+':''}${gap.toFixed(1)} pts · ${gap>=0?'+':''}${fmt(gap/100*tP)} ml`;
-          }
-        }}},
-      scales:{y:{min:0,max:110,ticks:{callback:v=>v+'%',font:{family:'JetBrains Mono',size:10}},grid:{color:'#eef1f6'}},
-        x:{grid:{display:false},ticks:{font:{family:'DM Sans',size:11}}}}
-    },plugins:[deadlineMarker]}));
-  }
+  const el=document.getElementById('chDGcurve');if(!el)return;
+  const {actual,planned}=globalProgressChartData(),deadline=contractPlanningDeadline();
+  const monthLabel=time=>new Date(time).toLocaleDateString('fr-FR',{month:'short',year:'numeric',timeZone:'UTC'});
+  const points=[...planned,...actual],deadlineTime=deadline?Date.parse(deadline+'T00:00:00Z'):null;
+  const deadlineMarker={id:'contractDeadlineMarker',afterDatasetsDraw(chart){
+    if(!Number.isFinite(deadlineTime))return;
+    const {x,y}=chart.scales;if(deadlineTime<x.min||deadlineTime>x.max)return;
+    const xPos=x.getPixelForValue(deadlineTime),ctx=chart.ctx;
+    ctx.save();ctx.strokeStyle='#b45309';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+    ctx.beginPath();ctx.moveTo(xPos,y.top);ctx.lineTo(xPos,y.bottom);ctx.stroke();
+    ctx.setLineDash([]);ctx.fillStyle='#92400e';ctx.font='10px DM Sans';ctx.textAlign='right';
+    ctx.fillText('Échéance '+fD(deadline),xPos-5,y.top+12);ctx.restore();
+  }};
+  const bounds=points.map(p=>p.x);if(Number.isFinite(deadlineTime))bounds.push(deadlineTime);
+  const min=bounds.length?Math.min(...bounds):Date.parse(today()+'T00:00:00Z');
+  const max=Math.max(min+86400000,bounds.length?Math.max(...bounds):min+30*86400000);
+  const monthTicks=planningMonthRange(new Date(min).toISOString().slice(0,7),new Date(max).toISOString().slice(0,7)).map(month=>{
+    const [year,m]=month.split('-').map(Number),end=Date.UTC(year,m,0);
+    return{value:planned.find(p=>p.date.slice(0,7)===month)?.x??Math.min(end,max)};
+  }).filter(t=>t.value>min&&t.value<=max);
+  charts.push(new Chart(el,{type:'line',data:{datasets:[
+    {label:'Avancement physique global réalisé',data:actual,borderColor:'#36b37e',backgroundColor:'#36b37e22',fill:true,spanGaps:false,pointBackgroundColor:'#36b37e',pointRadius:c=>c.dataIndex===actual.length-1?6:3,pointHoverRadius:8,borderWidth:3,tension:0},
+    {label:'Avancement physique global prévu',data:planned,borderColor:'#f59e0b',backgroundColor:'transparent',fill:false,spanGaps:false,pointBackgroundColor:'#f59e0b',pointRadius:3,pointHoverRadius:7,borderWidth:2,borderDash:[8,4],tension:0}
+  ]},options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{position:'top',labels:{font:{family:'DM Sans',size:12},boxWidth:14,usePointStyle:true}},
+      tooltip:{callbacks:{
+        title:items=>items.length?fD(items[0].raw.date):'',
+        label:item=>item.dataset.label+': '+item.parsed.y.toFixed(2)+' %',
+        afterBody:items=>{
+          const item=items.find(i=>i.datasetIndex===0);if(!item)return'';
+          const objective=plannedGlobalAtDate(item.raw.date);if(objective===null)return'';
+          const gap=item.parsed.y-objective;
+          return`Prévu à cette date : ${objective.toFixed(2)} %\nÉcart global : ${gap>=0?'+':''}${gap.toFixed(2)} pts`;
+        }
+      }}},
+    scales:{y:{min:0,max:110,ticks:{callback:v=>v+'%',font:{family:'JetBrains Mono',size:10}},grid:{color:'#eef1f6'}},
+      x:{type:'linear',min,max,afterBuildTicks:axis=>{axis.ticks=monthTicks;},grid:{display:false},ticks:{callback:monthLabel,font:{family:'DM Sans',size:11},maxRotation:45}}}
+  },plugins:[deadlineMarker]}));
 }
 
 // ── EXPORTS (D1, D2) ──
@@ -3515,7 +3382,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.1 — Fiabilisation formation Kong, 12/09/2026' ,
+      version_app:'2.4.2 — Planning physique global, 13/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
