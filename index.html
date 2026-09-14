@@ -1499,9 +1499,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.5</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.6</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.5</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.6</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2168,24 +2168,24 @@ function whatsappSummary(cu,zone=null){
 }
 function whatsappCumulativeLines(s,cu){
   const lines=[],add=text=>lines.push('  ▸ '+text);
-  if(s.topoLength>0)add(`Implantation topo: ${fmt(s.topoLength)} / ${fmt(s.planned)} ml (${s.topoRate.toFixed(1)}%)`);
-  if(s.barLength>0)add(`Bardage: ${fmt(s.barLength)} / ${fmt(s.planned)} ml (${s.barRate.toFixed(1)}%)`);
-  if(weldingVisible(s.locs)&&s.totals.soud>0)add(`Soudure PEHD: ${fmt(s.totals.soud)} ml (${s.rates.soud.toFixed(1)}%)`);
-  if(s.totals.fou>0)add(`Fouille: ${fmt(s.totals.fou)} / ${fmt(s.planned)} ml (${s.rates.fou.toFixed(1)}%)`);
-  if(s.totals.pose>0){
+  add(`Implantation topo: ${fmt(s.topoLength)} / ${fmt(s.planned)} ml (${s.topoRate.toFixed(1)}%)`);
+  add(`Bardage: ${fmt(s.barLength)} / ${fmt(s.planned)} ml (${s.barRate.toFixed(1)}%)`);
+  if(weldingVisible(s.locs))add(`Soudure PEHD: ${fmt(s.totals.soud)} ml (${s.rates.soud.toFixed(1)}%)`);
+  add(`Fouille: ${fmt(s.totals.fou)} / ${fmt(s.planned)} ml (${s.rates.fou.toFixed(1)}%)`);
+  {
     add(`Conduite posée: *${fmt(s.totals.pose)} / ${fmt(s.planned)} ml (${s.rates.pose.toFixed(1)}%)*`);
     add(`Reste à poser: *${fmt(Math.max(0,s.planned-s.totals.pose))} ml*`);
   }
-  if(s.totals.ess>0)add(`Essais conformes: ${fmt(s.totals.ess)} ml (${s.rates.ess.toFixed(1)}%)`);
-  if(s.gcTotal&&(s.rates.gc>0||s.gcDone>0))add(`Regards GC: ${s.rates.gc.toFixed(1)}% · ${s.gcDone}/${s.gcTotal} réceptionnés`);
+  add(`Essais conformes: ${fmt(s.totals.ess)} ml (${s.rates.ess.toFixed(1)}%)`);
+  if(s.gcTotal)add(`Regards GC: ${s.rates.gc.toFixed(1)}% · ${s.gcDone}/${s.gcTotal} réceptionnés`);
   // Un état réalisé/transmis reste visible même avant validation : 0 % validé
   // ne signifie pas que ces travaux n'ont pas commencé.
   for(const [key,label,statuses,rate] of [['rincageStatus','Rinçage-désinfection',RINSE_STATUSES,s.rates.rinse],['recolementStatus','Plans de récolement',RECO_STATUSES,s.rates.reco]]){
     const counts={};
     for(const l of s.locs){const status=cu[l.id]?.[key];if(status&&status!=='non_demarre'&&status!=='valide'&&statuses[status])counts[status]=(counts[status]||0)+1;}
-    const parts=[];if(rate>0)parts.push(rate.toFixed(1)+'% validés');
+    const parts=[rate.toFixed(1)+'% validés'];
     for(const [status,n] of Object.entries(counts))parts.push(`${n} front${n>1?'s':''} : ${statuses[status].toLowerCase()}`);
-    if(parts.length)add(label+': '+parts.join(' · '));
+    add(label+': '+parts.join(' · '));
   }
   return lines;
 }
@@ -2193,7 +2193,6 @@ function whatsappText(date,rp,cu,zone=null){
   const zones=zone===null?ZN:[zone],s=whatsappSummary(cu,zone),locIds=new Set(s.locs.map(l=>l.id));
   let txt=`*📊 RAPPORT JOURNALIER D'AVANCEMENT*\n*Projet :* ${projectShortName()}\n*Date des travaux :* ${fD(date)}\n`;
   if(zone!==null)txt+=`*Zone :* ${zone}\n`;
-  txt+=`*Statut :* ${fieldReportStatus(rp).wa}\n`;
   if(rp.kind==='correction'||countNegativeMovements(rp))txt+=`*Nature :* CORRECTION DE DONNÉES — ${(rp.correctionReason||'motif historique non documenté').trim()}\n`;
   let section=1;
   const heading=title=>`\n━━━━━━━━━━━━━━━━━━\n*${section++}. ${title}*\n\n`;
@@ -2207,7 +2206,7 @@ function whatsappText(date,rp,cu,zone=null){
       if(locs.length>1||WA_MODE==='detail')txt+=`*${l.nm}*\n`;
       txt+=rows.map(r=>`  ▸ ${r.type}: ${r.detail}`).join('\n')+'\n';
     }
-    if(!activities.length)txt+='  ▸ Aucune activité physique renseignée pour cette zone à cette date.\n';
+    if(!activities.length)txt+='  ▸ Pas d’activité ce jour\n';
     txt+='\n';
   }
   const constraints=constraintsForReport(date,rp).filter(c=>c.localite==='tous'||locIds.has(c.localite));
@@ -2265,7 +2264,7 @@ function pgWhatsapp(){
       <div><label class="fl" for="wa_scope">Périmètre</label><select class="fi" id="wa_scope" onchange="setWaScope(this.value)"><option value="project" ${WA_SCOPE==='project'?'selected':''}>Projet complet</option><option value="zone" ${WA_SCOPE==='zone'?'selected':''}>Une zone</option></select></div>
       ${WA_SCOPE==='zone'?`<div><label class="fl" for="wa_zone">Zone</label><select class="fi" id="wa_zone" onchange="setWaZone(this.value)">${ZN.map((z,i)=>`<option value="${i}" ${i===WA_ZONE_INDEX?'selected':''}>${escHtml(z)}</option>`).join('')}</select></div>`:''}
       <div><label class="fl">Format</label><div class="wa-mode-switch"><button class="${WA_MODE==='summary'?'is-active':''}" onclick="setWaMode('summary')">Synthèse</button><button class="${WA_MODE==='detail'?'is-active':''}" onclick="setWaMode('detail')">Détaillé</button></div></div>
-      <div class="wa-source-note">Activités par zone · Un seul récapitulatif ${zone===null?'global du projet':'de la zone'} · Postes sans avancement masqués</div></div>`;
+      <div class="wa-source-note">Activités par zone · Un seul récapitulatif ${zone===null?'global du projet':'de la zone'} · Toutes les activités applicables</div></div>`;
   if(!rp)return h+'<div class="cd" style="text-align:center;padding:40px;color:#8a95a5">Aucun rapport disponible</div></div>';
   const txt=whatsappText(SD,rp,cu,zone),label=zone===null?'Projet complet':'Zone '+zone;
   return h+`<div class="cd"><div class="ct">${escHtml(label)} · ${WA_MODE==='summary'?'Synthèse':'Version détaillée'}</div><pre class="wa-txt" id="wa_report">${escHtml(txt)}</pre><button class="bp" style="width:100%;margin-top:8px;background:#25D366" onclick="copyWA('report')">📋 Copier le rapport ${zone===null?'du projet':'de la zone'}</button></div></div>`;
@@ -3504,7 +3503,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.5 — Rapport WhatsApp consolidé, 14/09/2026' ,
+      version_app:'2.4.6 — Rapport WhatsApp complet, 14/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
