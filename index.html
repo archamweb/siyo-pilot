@@ -1288,7 +1288,7 @@ const bar=p=>`<div class="bw"><div class="pbb"><div class="bf" style="width:${Ma
 
 let V='login',SD=today(),charts=[],chartRenderTimer=null,constraintEntryFocus=false;
 let SAISIE_SECTION='network';
-let WA_MODE='summary',REPORT_SHOW_TECHNICAL=false;
+let WA_MODE='summary',WA_SCOPE='project',WA_ZONE_INDEX=0,WA_SCOPE_PROJECT='',REPORT_SHOW_TECHNICAL=false;
 const PROJECT_DRAFT_KEY='siyoPilot.projectConfigDraft.v2';
 function loadProjectDraft(){try{return JSON.parse(localStorage.getItem(scopedStorageKey(PROJECT_DRAFT_KEY))||'null');}catch(e){return null;}}
 let PARAM_SECTION='identity',PARAM_SELECTED_LOC=PROJECT_CONFIG.localities?.[0]?.id||'',PARAM_DRAFT=loadProjectDraft(),PROJECT_CREATE_OPEN=false;
@@ -1499,9 +1499,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.4</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.5</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.4</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.5</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2152,94 +2152,124 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
   return h;}
 
 // ── WHATSAPP ──
-function pgWhatsapp(){
-  const dates=ensureExistingReportDate(),rp=db[SD];
-  let cu=cumul(SD);if(safeMode)cu=safeCumul(cu);
-  let h=`<div class="mn"><div class="st">Rapport WhatsApp</div>
-    <div class="cd wa-controls"><div><label class="fl">Date</label><select class="fi" style="width:220px" onchange="SD=this.value;draw()">${dates.map(d=>`<option value="${d}" ${d===SD?'selected':''}>${fD(d)}</option>`).join('')}</select></div>
-      <div><label class="fl">Format</label><div class="wa-mode-switch"><button class="${WA_MODE==='summary'?'is-active':''}" onclick="setWaMode('summary')">Synthèse</button><button class="${WA_MODE==='detail'?'is-active':''}" onclick="setWaMode('detail')">Détaillé</button></div></div>
-      <div class="wa-source-note">Les cumuls utilisent les mêmes valeurs retenues que le tableau de bord.</div></div>`;
 
-  if(!rp)return h+`<div class="cd" style="text-align:center;padding:40px;color:#8a95a5">Aucun rapport disponible</div></div>`;
+function setWaScope(value){WA_SCOPE=value==='zone'?'zone':'project';draw();}
+function setWaZone(value){const i=Number(value);WA_ZONE_INDEX=Number.isInteger(i)&&i>=0&&i<ZN.length?i:0;draw();}
+window.setWaScope=setWaScope;window.setWaZone=setWaZone;
 
-  ZN.forEach(zone=>{
-    const zs=zonePhysicalSummary(zone,cu),locs=zs.locs;
-    const lg=rp.logistique?.[zone]||{};
-    const km=(lg.km_soir||0)-(lg.km_matin||0);
-    const reportStatus=fieldReportStatus(rp).wa;
-    let txt=`*📊 RAPPORT D'AVANCEMENT — WHATSAPP*\n`;
-    txt+=`*Projet :* ${projectShortName()}\n`;
-    txt+=`*Date :* ${fD(SD)}\n`;
-    txt+=`*Zone :* ${zone}\n`;
-    txt+=`*Statut :* ${reportStatus}\n`;
-    if(rp.kind==='correction'||countNegativeMovements(rp))txt+=`*Nature :* CORRECTION DE DONNÉES — ${(rp.correctionReason||'motif historique non documenté').trim()}\n`;
-    txt+=`━━━━━━━━━━━━━━━━━━\n\n`;
-    txt+=`*1. ACTIVITÉS DU JOUR*\n\n`;
-    const activities=reportDailyActivities(rp,locs);
-    locs.forEach(l=>{
+function whatsappSummary(cu,zone=null){
+  if(zone!==null)return zonePhysicalSummary(zone,cu);
+  // Le récapitulatif projet utilise directement le calcul du tableau de bord.
+  // Les pourcentages des zones ne sont jamais additionnés ou moyennés.
+  const s=dashboardPhysicalSummary(cu);
+  return{locs:LOC,planned:s.tP,index:s.index,topoLength:s.topoLength,barLength:s.totals.bar,topoRate:s.rates.topographie,barRate:s.rates.bardage,
+    totals:{soud:s.totals.soud,fou:s.totals.fou,pose:s.totals.rem,ess:s.totals.ess},gcTotal:s.gcTotal,gcDone:s.gcDone,
+    rates:{soud:s.rates.assemblage,fou:s.rates.ouverture,pose:s.rates.fermeture,ess:s.rates.essais,gc:s.rates.gc,rinse:s.rates.rincage,reco:s.rates.recolement}};
+}
+function whatsappCumulativeLines(s,cu){
+  const lines=[],add=text=>lines.push('  ▸ '+text);
+  if(s.topoLength>0)add(`Implantation topo: ${fmt(s.topoLength)} / ${fmt(s.planned)} ml (${s.topoRate.toFixed(1)}%)`);
+  if(s.barLength>0)add(`Bardage: ${fmt(s.barLength)} / ${fmt(s.planned)} ml (${s.barRate.toFixed(1)}%)`);
+  if(weldingVisible(s.locs)&&s.totals.soud>0)add(`Soudure PEHD: ${fmt(s.totals.soud)} ml (${s.rates.soud.toFixed(1)}%)`);
+  if(s.totals.fou>0)add(`Fouille: ${fmt(s.totals.fou)} / ${fmt(s.planned)} ml (${s.rates.fou.toFixed(1)}%)`);
+  if(s.totals.pose>0){
+    add(`Conduite posée: *${fmt(s.totals.pose)} / ${fmt(s.planned)} ml (${s.rates.pose.toFixed(1)}%)*`);
+    add(`Reste à poser: *${fmt(Math.max(0,s.planned-s.totals.pose))} ml*`);
+  }
+  if(s.totals.ess>0)add(`Essais conformes: ${fmt(s.totals.ess)} ml (${s.rates.ess.toFixed(1)}%)`);
+  if(s.gcTotal&&(s.rates.gc>0||s.gcDone>0))add(`Regards GC: ${s.rates.gc.toFixed(1)}% · ${s.gcDone}/${s.gcTotal} réceptionnés`);
+  // Un état réalisé/transmis reste visible même avant validation : 0 % validé
+  // ne signifie pas que ces travaux n'ont pas commencé.
+  for(const [key,label,statuses,rate] of [['rincageStatus','Rinçage-désinfection',RINSE_STATUSES,s.rates.rinse],['recolementStatus','Plans de récolement',RECO_STATUSES,s.rates.reco]]){
+    const counts={};
+    for(const l of s.locs){const status=cu[l.id]?.[key];if(status&&status!=='non_demarre'&&status!=='valide'&&statuses[status])counts[status]=(counts[status]||0)+1;}
+    const parts=[];if(rate>0)parts.push(rate.toFixed(1)+'% validés');
+    for(const [status,n] of Object.entries(counts))parts.push(`${n} front${n>1?'s':''} : ${statuses[status].toLowerCase()}`);
+    if(parts.length)add(label+': '+parts.join(' · '));
+  }
+  return lines;
+}
+function whatsappText(date,rp,cu,zone=null){
+  const zones=zone===null?ZN:[zone],s=whatsappSummary(cu,zone),locIds=new Set(s.locs.map(l=>l.id));
+  let txt=`*📊 RAPPORT JOURNALIER D'AVANCEMENT*\n*Projet :* ${projectShortName()}\n*Date des travaux :* ${fD(date)}\n`;
+  if(zone!==null)txt+=`*Zone :* ${zone}\n`;
+  txt+=`*Statut :* ${fieldReportStatus(rp).wa}\n`;
+  if(rp.kind==='correction'||countNegativeMovements(rp))txt+=`*Nature :* CORRECTION DE DONNÉES — ${(rp.correctionReason||'motif historique non documenté').trim()}\n`;
+  let section=1;
+  const heading=title=>`\n━━━━━━━━━━━━━━━━━━\n*${section++}. ${title}*\n\n`;
+  txt+=heading('ACTIVITÉS DU JOUR');
+  for(const z of zones){
+    const locs=LOC.filter(l=>l.z===z),activities=reportDailyActivities(rp,locs,date);
+    txt+=`📍 *Zone ${z}*\n`;
+    for(const l of locs){
       const rows=activities.filter(r=>r.localite===l.nm);
-      if(rows.length)txt+=`📍 *${l.nm.toUpperCase()}*\n${rows.map(r=>`  ▸ ${r.type}: ${r.detail}`).join('\n')}\n\n`;
-    });
-    if(!activities.length)txt+=`  ▸ Aucune activité physique renseignée pour cette zone à cette date.\n\n`;
-    let sectionNo=2;
-    txt+=`━━━━━━━━━━━━━━━━━━\n`;
-    txt+=`*${sectionNo++}. SITUATION D'AVANCEMENT*\n\n`;
-    txt+=`  ▸ Avancement physique de la zone: *${zs.index.toFixed(1)} %*\n`;
-    txt+=`  ▸ Implantation topo: ${fmt(zs.topoLength)} / ${fmt(zs.planned)} ml (${zs.topoRate.toFixed(1)}%)\n`;
-    txt+=`  ▸ Bardage: ${fmt(zs.barLength)} / ${fmt(zs.planned)} ml (${zs.barRate.toFixed(1)}%)\n`;
-    if(weldingVisible(locs))txt+=`  ▸ Soudure PEHD: ${fmt(zs.totals.soud)} ml (${zs.rates.soud.toFixed(1)}%)\n`;
-    txt+=`  ▸ Fouille: ${fmt(zs.totals.fou)} / ${fmt(zs.planned)} ml (${zs.rates.fou.toFixed(1)}%)\n`;
-    txt+=`  ▸ Conduite posée: *${fmt(zs.totals.pose)} / ${fmt(zs.planned)} ml (${zs.rates.pose.toFixed(1)}%)*\n`;
-    txt+=`  ▸ Reste à poser: *${fmt(Math.max(0,zs.planned-zs.totals.pose))} ml*\n`;
-    txt+=`  ▸ Essais conformes: ${fmt(zs.totals.ess)} ml (${zs.rates.ess.toFixed(1)}%)\n`;
-    if(zs.gcTotal)txt+=`  ▸ Regards GC: ${zs.rates.gc.toFixed(1)}% · ${zs.gcDone}/${zs.gcTotal} réceptionnés\n`;
-    txt+=`  ▸ Rinçage-désinfection: ${zs.rates.rinse.toFixed(1)}%\n`;
-    txt+=`  ▸ Plans de récolement: ${zs.rates.reco.toFixed(1)}%\n\n`;
-
-    if(WA_MODE==='detail'){
-      txt+=`━━━━━━━━━━━━━━━━━━\n`;
-      txt+=`*${sectionNo++}. DÉTAIL CUMULÉ PAR LOCALITÉ*\n\n`;
-      locs.forEach(l=>{const retained=lotRetainedTotals(l,cu[l.id]),prep=zonePhysicalSummaryForLocality(l,cu);txt+=`📍 *${l.nm.toUpperCase()}*\n  ▸ Implantation topo: ${fmt(prep.topo)} / ${fmt(l.tot)} ml (${pc(prep.topo,l.tot).toFixed(1)}%)\n  ▸ Bardage: ${fmt(prep.bar)} / ${fmt(l.tot)} ml (${pc(prep.bar,l.tot).toFixed(1)}%)\n  ▸ Pose: ${fmt(retained.pose)} / ${fmt(l.tot)} ml (${pc(retained.pose,l.tot).toFixed(1)}%)\n${weldingVisible([l])?`  ▸ Soudure PEHD: ${fmt(retained.soud)} ml · `:'  ▸ '}Fouille: ${fmt(retained.fou)} ml · Essais: ${fmt(retained.ess)} ml\n${l.regards?`  ▸ Regards: ${pc(cu[l.id].gcProgress||0,l.regards).toFixed(1)}% · ${cu[l.id].gc||0}/${l.regards} réceptionnés\n`:''}\n`;});
+      if(!rows.length)continue;
+      if(locs.length>1||WA_MODE==='detail')txt+=`*${l.nm}*\n`;
+      txt+=rows.map(r=>`  ▸ ${r.type}: ${r.detail}`).join('\n')+'\n';
     }
-
-    let tFl2=0,tSd2=0;
-    const staffLines=[];
-    locs.forEach(l=>{const e=rp.eff?.[l.id]||{};const fl=(+e.f||0),sd=(+e.s||0);if(!fl&&!sd)return;tFl2+=fl;tSd2+=sd;if(WA_MODE==='detail')staffLines.push(`  👷 ${l.nm}: ${fl} fouilleurs, ${sd} ${materialTracking()?'poseurs / soudeurs':'soudeurs'}${e.n?' ('+e.n+')':''}`);});
-    if(tFl2+tSd2||km||lg.carburant||(lg.remarques&&lg.remarques!=='RAS')){
-      txt+=`━━━━━━━━━━━━━━━━━━\n`;
-      txt+=`*${sectionNo++}. RESSOURCES & LOGISTIQUE*\n\n`;
-      if(staffLines.length)txt+=staffLines.join('\n')+'\n';
-      if(tFl2+tSd2>0)txt+=`  ▸ Effectif déclaré: *${tFl2+tSd2}* (${tFl2} fouilleurs · ${tSd2} ${materialTracking()?'poseurs / soudeurs':'soudeurs'})\n`;
-      if(km)txt+=`  ▸ Kilométrage: ${fmt(km)} km\n`;
-      if(lg.carburant)txt+=`  ▸ Carburant: ${lg.carburant} L\n`;
-      if(lg.remarques&&lg.remarques!=='RAS')txt+=`  ▸ ${lg.remarques}\n`;
+    if(!activities.length)txt+='  ▸ Aucune activité physique renseignée pour cette zone à cette date.\n';
+    txt+='\n';
+  }
+  const constraints=constraintsForReport(date,rp).filter(c=>c.localite==='tous'||locIds.has(c.localite));
+  if(constraints.length){
+    txt+=heading('CONTRAINTES ET ACTIONS');
+    for(const c of constraints){
+      const l=LOC.find(l=>l.id===c.localite),loc=c.localite==='tous'?'Ensemble chantier':l?`${l.z} · ${l.nm}`:c.localite;
+      const durationDays=constraintDurationDays(c);
+      txt+=`⚠️ *${loc} — ${CONTRAINTE_ACTIVITES[c.activite]||c.activite||'Activité'}*\n`;
+      txt+=`  ▸ Statut: *${CONTRAINTE_STATUTS[c.statut]||'Non renseigné'}*\n`;
+      if(c.dateFait&&c.dateFait!==date)txt+=`  ▸ Fait signalé le ${fD(c.dateFait)} · rattaché à ce rapport\n`;
+      txt+=`  ▸ ${CONTRAINTE_EFFETS[c.effet]||c.effet||'Effet'} · ${durationDays?fmt(durationDays)+' j':'durée à compléter'}\n`;
+      txt+=`  ▸ Cause: ${CONTRAINTE_CAUSES[c.cause]||c.cause||'À préciser'}\n  ▸ Fait: ${c.observation||'—'}\n`;
+      if(c.action)txt+=`  ▸ Action: ${c.action}\n`;
+      if(c.reference)txt+=`  ▸ Réf.: ${c.reference}\n`;
       txt+='\n';
     }
-    const locIds=new Set(locs.map(l=>l.id));
-    const contraintesZone=constraintsForReport(SD,rp).filter(c=>c.localite==='tous'||locIds.has(c.localite));
-    if(contraintesZone.length){
-      txt+=`\n━━━━━━━━━━━━━━━━━━\n`;
-      txt+=`*${sectionNo++}. CONTRAINTES DU JOUR*\n\n`;
-      contraintesZone.forEach(c=>{
-        const loc=c.localite==='tous'?'Ensemble chantier':(LOC.find(l=>l.id===c.localite)?.nm||c.localite);
-        const durationDays=constraintDurationDays(c);
-        txt+=`⚠️ *${loc} — ${CONTRAINTE_ACTIVITES[c.activite]||c.activite||'Activité'}*\n`;
-        if(c.dateFait&&c.dateFait!==SD)txt+=`  ▸ Fait signalé le ${fD(c.dateFait)} · rattaché à ce rapport\n`;
-        txt+=`  ▸ ${CONTRAINTE_EFFETS[c.effet]||c.effet||'Effet'} · ${durationDays?fmt(durationDays)+' j':'durée à compléter'}\n`;
-        txt+=`  ▸ Cause: ${CONTRAINTE_CAUSES[c.cause]||c.cause||'À préciser'}\n`;
-        txt+=`  ▸ Fait: ${c.observation||'—'}\n`;
-        if(c.action)txt+=`  ▸ Action: ${c.action}\n`;
-        if(c.reference)txt+=`  ▸ Réf.: ${c.reference}\n`;
-        txt+=`\n`;
-      });
-    }
-    if(rp.rmq&&rp.rmq!=='RAS')txt+=`\n*Remarque générale :* ${rp.rmq}`;
+  }
+  txt+=heading(zone===null?'RÉCAPITULATIF GLOBAL DU PROJET':'RÉCAPITULATIF DE LA ZONE');
+  txt+=`*Situation cumulée au ${fD(date)}*\n`;
+  txt+=`  ▸ ${zone===null?'Avancement physique global du projet':'Avancement physique de la zone'}: *${s.index.toFixed(1)} %*\n`;
+  txt+=whatsappCumulativeLines(s,cu).join('\n')+'\n';
 
-    h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Zone ${zone} · ${WA_MODE==='summary'?'Synthèse':'Version détaillée'}</div>
-      <pre class="wa-txt" id="wa_${zone}">${escHtml(txt)}</pre>
-      <button class="bp" style="width:100%;margin-top:8px;background:#25D366" onclick="copyWA('${zone}')">📋 Copier la ${WA_MODE==='summary'?'synthèse':'version détaillée'} Zone ${zone}</button>
-    </div>`;});
-  h+=`</div>`;return h;}
+  // Conserver les catégories de ressources existantes, regroupées par zone.
+  // Ni nouvelle catégorie d'effectif ni mobilisation ajoutée dans WhatsApp.
+  const resourceBlocks=[];
+  for(const z of zones){
+    const lg=rp.logistique?.[z]||{},km=(lg.km_soir||0)-(lg.km_matin||0),staffLines=[];
+    let fl=0,sd=0;
+    for(const l of LOC.filter(l=>l.z===z)){
+      const e=rp.eff?.[l.id]||{},f=+e.f||0,p=+e.s||0;fl+=f;sd+=p;
+      if(WA_MODE==='detail'&&(f||p))staffLines.push(`  👷 ${l.nm}: ${f} fouilleurs, ${p} ${materialTracking()?'poseurs / soudeurs':'soudeurs'}${e.n?' ('+e.n+')':''}`);
+    }
+    if(!(fl+sd||km||lg.carburant||(lg.remarques&&lg.remarques!=='RAS')))continue;
+    let block=`*Zone ${z}*\n`;
+    if(staffLines.length)block+=staffLines.join('\n')+'\n';
+    if(fl+sd)block+=`  ▸ Effectif déclaré: *${fl+sd}* (${fl} fouilleurs · ${sd} ${materialTracking()?'poseurs / soudeurs':'soudeurs'})\n`;
+    if(km)block+=`  ▸ Kilométrage: ${fmt(km)} km\n`;
+    if(lg.carburant)block+=`  ▸ Carburant: ${lg.carburant} L\n`;
+    if(lg.remarques&&lg.remarques!=='RAS')block+=`  ▸ ${lg.remarques}\n`;
+    resourceBlocks.push(block);
+  }
+  if(resourceBlocks.length)txt+=heading('RESSOURCES & LOGISTIQUE')+resourceBlocks.join('\n');
+  if(rp.rmq&&rp.rmq!=='RAS')txt+=`\n*Remarque générale :* ${rp.rmq}\n`;
+  return txt.trim();
+}
+function pgWhatsapp(){
+  const dates=ensureExistingReportDate(),rp=db[SD];
+  if(WA_SCOPE_PROJECT!==ACTIVE_PROJECT_ID){WA_SCOPE_PROJECT=ACTIVE_PROJECT_ID;WA_SCOPE='project';WA_ZONE_INDEX=0;}
+  if(WA_ZONE_INDEX>=ZN.length)WA_ZONE_INDEX=0;
+  const zone=WA_SCOPE==='zone'&&ZN.length?ZN[WA_ZONE_INDEX]:null;
+  let cu=cumul(SD);if(safeMode)cu=safeCumul(cu);
+  let h=`<div class="mn"><div class="st">Rapport WhatsApp</div>
+    <div class="cd wa-controls"><div><label class="fl">Date des travaux</label><select class="fi" style="width:220px" onchange="SD=this.value;draw()">${dates.map(d=>`<option value="${d}" ${d===SD?'selected':''}>${fD(d)}</option>`).join('')}</select></div>
+      <div><label class="fl" for="wa_scope">Périmètre</label><select class="fi" id="wa_scope" onchange="setWaScope(this.value)"><option value="project" ${WA_SCOPE==='project'?'selected':''}>Projet complet</option><option value="zone" ${WA_SCOPE==='zone'?'selected':''}>Une zone</option></select></div>
+      ${WA_SCOPE==='zone'?`<div><label class="fl" for="wa_zone">Zone</label><select class="fi" id="wa_zone" onchange="setWaZone(this.value)">${ZN.map((z,i)=>`<option value="${i}" ${i===WA_ZONE_INDEX?'selected':''}>${escHtml(z)}</option>`).join('')}</select></div>`:''}
+      <div><label class="fl">Format</label><div class="wa-mode-switch"><button class="${WA_MODE==='summary'?'is-active':''}" onclick="setWaMode('summary')">Synthèse</button><button class="${WA_MODE==='detail'?'is-active':''}" onclick="setWaMode('detail')">Détaillé</button></div></div>
+      <div class="wa-source-note">Activités par zone · Un seul récapitulatif ${zone===null?'global du projet':'de la zone'} · Postes sans avancement masqués</div></div>`;
+  if(!rp)return h+'<div class="cd" style="text-align:center;padding:40px;color:#8a95a5">Aucun rapport disponible</div></div>';
+  const txt=whatsappText(SD,rp,cu,zone),label=zone===null?'Projet complet':'Zone '+zone;
+  return h+`<div class="cd"><div class="ct">${escHtml(label)} · ${WA_MODE==='summary'?'Synthèse':'Version détaillée'}</div><pre class="wa-txt" id="wa_report">${escHtml(txt)}</pre><button class="bp" style="width:100%;margin-top:8px;background:#25D366" onclick="copyWA('report')">📋 Copier le rapport ${zone===null?'du projet':'de la zone'}</button></div></div>`;
+}
 
 async function copyWA(zone){
   const el=document.getElementById('wa_'+zone);if(!el)return;
@@ -3474,7 +3504,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.4 — Rapports terrain et mobilisation, 14/09/2026' ,
+      version_app:'2.4.5 — Rapport WhatsApp consolidé, 14/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
