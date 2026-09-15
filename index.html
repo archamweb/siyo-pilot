@@ -1499,9 +1499,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.6</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.7</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.6</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.7</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2855,7 +2855,7 @@ function pgDG(){
       <div class="decision-kicker">Avancement financier</div>
       <div class="decision-number ${avFinancier===null?'decision-number--pending':''}">${avFinancier===null?'Non calculé':avFinancier.toFixed(1)+' %'}</div>
       <div class="decision-progress ${avFinancier===null?'decision-progress--pending':''}"><span style="width:${avFinancier===null?0:Math.min(100,avFinancier)}%"></span></div>
-      <div class="decision-highlight">${finance?`Situation ${finance.period.number?'N°'+String(finance.period.number).padStart(2,'0')+' ':''}validée · ${escHtml(finance.period.label||'')}${finance.marche!=null?`<br><b>${attachMoney(finance.cumul)}</b> / ${attachMoney(finance.marche)}`:'<br><small>Montants réservés à la direction du projet</small>'}`:'Aucun attachement validé disponible'}</div>
+      <div class="decision-highlight">${finance?`Situation ${finance.period.number?'N°'+String(finance.period.number).padStart(2,'0')+' ':''}validée · ${escHtml(finance.period.label||'')}`:'Aucun attachement validé disponible'}</div>
     </div>
     <div class="decision-card decision-card--closed">
       <div class="decision-kicker">Conduite posée</div>
@@ -3503,7 +3503,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.6 — Rapport WhatsApp complet, 14/09/2026' ,
+      version_app:'2.4.7 — KPI financier sans montants, 15/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
