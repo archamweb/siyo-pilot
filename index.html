@@ -650,43 +650,148 @@ async function syncLoad(){
 // Versions serveur connues par date (contrôle de concurrence : un enregistrement n'écrase
 // que la version qu'il a lue ; sinon conflit signalé, jamais d'écrasement silencieux).
 let DB_VERSIONS={};
+// Historique : données conservées côté serveur, brouillons et envois en attente côté appareil.
+let REPORT_HISTORY=null,HISTORY_REQUEST=0;
+const REPORT_PENDING_MEMORY=new Map();
+function canReadReportHistory(){return canWrite();}
+function reportRevisionReason(){return (document.getElementById('revision_reason')?.value||'').trim();}
+function renderRevisionReason(ex){return ex||DB_VERSIONS[SD]
+  ?`<div class="cd report-revision-reason"><label class="fl" for="revision_reason">Motif de modification — obligatoire</label><textarea class="fi" id="revision_reason" rows="2" minlength="8" maxlength="1000" placeholder="Ex. Quantité de pose corrigée après vérification du métré"></textarea><div class="saisie-note">L’ancienne version sera conservée. Décrivez ce qui change et pourquoi. Un nouveau motif est nécessaire à chaque modification.</div></div>`
+  :`<details class="cd"><summary>Commentaire de création (facultatif)</summary><textarea class="fi" id="revision_reason" rows="2" maxlength="1000" placeholder="Facultatif à la première saisie ; requis pour recréer un rapport supprimé."></textarea></details>`;}
+function stableReportJSON(value){if(Array.isArray(value))return '['+value.map(stableReportJSON).join(',')+']';if(value&&typeof value==='object')return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+stableReportJSON(value[k])).join(',')+'}';return JSON.stringify(value);}
+function pendingReportKey(date,pid=ACTIVE_PROJECT_ID){return 'siyo.report-request.v1.'+(SESSION?.user?.id||'anonymous')+'.'+pid+'.'+date;}
+function reportPendingRequest(date,data,expected,reason){
+  const key=pendingReportKey(date),semantic={...data};delete semantic.validation;
+  const signature=stableReportJSON({data:semantic,expected,reason});
+  let previous=REPORT_PENDING_MEMORY.get(key);if(!previous){try{previous=JSON.parse(localStorage.getItem(key)||'null');}catch(e){}}
+  if(previous?.signature===signature&&previous.requestId&&previous.payload)return previous;
+  const requestId=crypto.randomUUID();const pending={signature,requestId,payload:JSON.parse(JSON.stringify(data)),reason,expected};
+  REPORT_PENDING_MEMORY.set(key,pending);try{localStorage.setItem(key,JSON.stringify(pending));}catch(e){}
+  return pending;
+}
+function clearPendingReport(date,pid=ACTIVE_PROJECT_ID){const key=pendingReportKey(date,pid);REPORT_PENDING_MEMORY.delete(key);try{localStorage.removeItem(key);}catch(e){}}
+function historyErrorMessage(error){
+  if(['PGRST202','42P01','42883'].includes(error?.code))return 'L’historique n’est pas encore installé dans la base. Contactez la direction avant de réessayer.';
+  return error?.message||'Connexion interrompue : le résultat de l’envoi n’est pas confirmé. Réessayez sans modifier la saisie.';
+}
+async function saveReportWithHistory(date,data){
+  if(!canWrite()||syncing)return false;
+  if(!isConfigured()){toast('Non connecté à la base : rien n’a été enregistré.');return false;}
+  const pid=ACTIVE_PROJECT_ID,draft=readReportDraft(date),expected=draft?(draft.baseVersion||0):(DB_VERSIONS[date]||0),reason=reportRevisionReason();
+  if(expected&&reason.length<8){alert('Expliquez la modification du rapport en 8 caractères au minimum.');document.getElementById('revision_reason')?.focus();return false;}
+  syncing=true;document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=true);
+  try{
+    const pending=reportPendingRequest(date,data,expected,reason);
+    const result=await sb.rpc('siyo_save_report',{p_project_id:pid,p_report_date:date,p_expected_version:pending.expected,p_payload:pending.payload,p_reason:pending.reason,p_request_id:pending.requestId});
+    if(result.error)throw result.error;
+    const saved=result.data;
+    if(!saved||!Number.isInteger(saved.version)||saved.version<1||!saved.payload?.loc)throw new Error('Réponse serveur incomplète. Réessayez sans modifier la saisie.');
+    if(pid===ACTIVE_PROJECT_ID){db[date]=saved.payload;DB_VERSIONS[date]=saved.version;online=true;lastSync=stamp();REPORT_HISTORY=null;}
+    clearPendingReport(date,pid);return true;
+  }catch(error){
+    toast(historyErrorMessage(error)+' Votre brouillon est conservé.');
+    if(/motif|recréer|modification/i.test(error?.message||'')){const el=document.getElementById('revision_reason');const details=el?.closest('details');if(details)details.open=true;el?.focus();}
+    return false;
+  }finally{syncing=false;document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=false);}
+}
+async function deleteReportWithHistory(date,reason){
+  if(!canWrite()||syncing||CONFIG_SAVING)return false;
+  if(currentRole()!=='direction'){toast('Suppression réservée à la direction du projet.');return false;}
+  const why=(reason??prompt('Motif de suppression (8 caractères minimum) :')??'').trim();
+  if(why.length<8){toast('La suppression nécessite un motif explicite.');return false;}
+  const pid=ACTIVE_PROJECT_ID,expected=DB_VERSIONS[date];if(!expected){toast('Rechargez le rapport avant de le supprimer.');return false;}
+  syncing=true;
+  try{const r=await sb.rpc('siyo_delete_report',{p_project_id:pid,p_report_date:date,p_expected_version:expected,p_reason:why,p_request_id:crypto.randomUUID()});if(r.error)throw r.error;if(!r.data?.deleted)throw new Error('Suppression non confirmée.');if(pid===ACTIVE_PROJECT_ID){delete db[date];delete DB_VERSIONS[date];REPORT_HISTORY=null;clearReportDraft(date);clearPendingReport(date);}return true;}
+  catch(e){toast(historyErrorMessage(e));return false;}finally{syncing=false;}
+}
+function historyPanelKey(date=SD){return ACTIVE_PROJECT_ID+'|'+date;}
+async function openReportHistory(date=SD,append=false){
+  if(!canReadReportHistory()||!weeklyValidDate(date))return;
+  const pid=ACTIVE_PROJECT_ID,token=++HISTORY_REQUEST,key=historyPanelKey(date);
+  const prior=append&&REPORT_HISTORY?.key===key?REPORT_HISTORY:null;
+  REPORT_HISTORY={key,pid,date,rows:prior?.rows||[],loading:true,error:'',enforced:prior?.enforced??null,before:prior?.before??null,after:prior?.after??null,more:false,includeMeta:prior?.includeMeta||false};
+  V='rapport';draw();
+  try{
+    const offset=REPORT_HISTORY.rows.length;
+    const results=await Promise.all([
+      sb.from('report_history').select('version,operation,payload,recorded_at,actor_id,actor_label,reason,write_source,source_author_id,source_updated_at').eq('project_id',pid).eq('report_date',date).order('version',{ascending:false}).range(offset,offset+49),
+      sb.from('report_history_control').select('enforced,activated_at').eq('project_id',pid).maybeSingle()
+    ]);
+    if(results[0].error)throw results[0].error;if(results[1].error)throw results[1].error;
+    if(token!==HISTORY_REQUEST||ACTIVE_PROJECT_ID!==pid||REPORT_HISTORY?.key!==key)return;
+    const state=REPORT_HISTORY;state.rows.push(...(results[0].data||[]));state.more=(results[0].data||[]).length===50;state.enforced=results[1].data?.enforced??true;
+    if(state.after===null)state.after=state.rows[0]?.version??null;if(state.before===null)state.before=state.rows[1]?.version??null;state.loading=false;
+  }catch(error){if(token!==HISTORY_REQUEST||ACTIVE_PROJECT_ID!==pid)return;REPORT_HISTORY.loading=false;REPORT_HISTORY.error=historyErrorMessage(error);}
+  if(V==='rapport')draw();
+}
+function closeReportHistory(){HISTORY_REQUEST++;REPORT_HISTORY=null;draw();}
+function selectHistoryVersion(which,value){if(!REPORT_HISTORY||!['before','after'].includes(which))return;const n=Number(value);if(REPORT_HISTORY.rows.some(r=>r.version===n)){REPORT_HISTORY[which]=n;draw();}}
+async function activateReportHistory(){
+  const state=REPORT_HISTORY;if(!state||state.pid!==ACTIVE_PROJECT_ID||currentRole()!=='direction'||state.loading)return;
+  state.loading=true;draw();
+  try{const r=await sb.from('report_history_control').upsert({project_id:state.pid,enforced:true},{onConflict:'project_id'}).select('enforced');if(r.error)throw r.error;if(!r.data?.[0]?.enforced)throw new Error('Activation non confirmée.');if(REPORT_HISTORY===state)state.enforced=true;toast('Protection activée : les anciens écrans devront être actualisés avant leur prochain enregistrement.');}
+  catch(e){if(REPORT_HISTORY===state)state.error=historyErrorMessage(e);}finally{if(REPORT_HISTORY===state){state.loading=false;draw();}}
+}
+function historyDiff(before,after,includeMeta=false){
+  const changes=[];
+  function visit(a,b,path){
+    if(!includeMeta&&path[0]==='validation')return;
+    if(stableReportJSON(a)===stableReportJSON(b))return;
+    const aObj=a!==null&&typeof a==='object',bObj=b!==null&&typeof b==='object';
+    if((aObj||a===undefined)&&(bObj||b===undefined)&&(aObj||bObj)){
+      const keys=[...new Set([...Object.keys(a||{}),...Object.keys(b||{})])].sort();
+      if(keys.length){keys.forEach(k=>visit(a?.[k],b?.[k],[...path,k]));return;}
+    }
+    changes.push({path,before:a,after:b});
+  }
+  visit(before,after,[]);return changes;
+}
+function historyFieldLabel(path){
+  const labels={loc:'Terrain',zones:'Tronçon',s:'Soudure (ml)',f:'Fouille (ml)',r:'Pose (ml)',ess:'Essais (ml)',barDay:'Bardage du jour (ml)',bar:'Bardage cumulé (ml)',topoDay:'Implantation du jour (ml)',roadAreaDay:'Ouverture de voie (m²)',imp:'Implantation cumulée',gc:'Ancien cumul GC',eff:'Effectifs',finitions:'Finitions',regards:'Regards',stage:'Étape',gcMeta:'Observation GC',rincage:'Rinçage',recolement:'Récolement',contraintes:'Contraintes',rmq:'Remarques',mobilisation:'Mobilisation',rate:'Taux (%)',correctionReason:'Motif de correction des quantités',kind:'Nature de la saisie',validation:'Métadonnées de validation',logistique:'Logistique',note:'Observation',reference:'Référence',p:'Observation terrain'};
+  const l=path[0]==='loc'?LOC.find(l=>l.id===path[1]):null;
+  return path.map((k,i)=>{if(l&&i===1)return l.nm;if(l&&path[i-1]==='zones')return l.zones.find(z=>z.zid===k)?.nm||k;if(l&&i===4&&path[2]==='zones')return 'DN '+k;if(path[0]==='eff'&&i===2)return {f:'Fouilleurs',s:'Soudeurs',n:'Observation'}[k]||k;return labels[k]||LOC.find(l=>l.id===k)?.nm||k;}).join(' · ');
+}
+function historyValue(value){if(value===undefined)return 'Non renseigné';if(value===null)return 'Valeur vide';if(value==='')return '(texte vide)';if(typeof value==='object')return JSON.stringify(value);if(typeof value==='number')return weeklyFormat(value);return String(value);}
+function historyTime(value){if(!value)return 'Non disponible';const d=new Date(value);return Number.isNaN(d.getTime())?'Date non disponible':d.toLocaleString('fr-FR',{timeZone:'Africa/Abidjan',dateStyle:'short',timeStyle:'medium'})+' (Abidjan)';}
+function historyOperation(row){return {baseline:'État repris',create:'Création',update:'Modification',delete:'Suppression',restore:'Recréation'}[row.operation]||row.operation;}
+function renderReportHistory(){
+  if(!canReadReportHistory())return '';
+  const s=REPORT_HISTORY;if(!s||s.pid!==ACTIVE_PROJECT_ID)return '';
+  let h=`<div class="mn"><section class="cd report-history"><div class="history-heading"><div class="ct">Historique des versions</div><button class="bs" onclick="closeReportHistory()">Fermer</button></div><div class="history-controls"><label>Date du rapport<input class="fi" type="date" value="${s.date}" max="${today()}" onchange="openReportHistory(this.value)"></label><button class="bs" onclick="openReportHistory('${s.date}')">Actualiser l’historique</button></div><p class="saisie-note">Horodatages enregistrés par la base. Un compte partagé identifie le compte utilisé, pas la personne physique. Les états repris ne reconstituent pas les anciennes versions perdues.</p>`;
+  if(s.enforced===false)h+=`<div class="history-notice"><b>Archivage actif — anciens écrans encore autorisés</b><p>Les changements sont conservés, mais un ancien écran peut encore enregistrer sans motif.</p>${currentRole()==='direction'?`<p>Après installation de cette version et actualisation des écrans de saisie, activez la protection pour imposer le contrôle de version et un motif à chaque modification.</p><button class="bp" ${s.loading?'disabled':''} onclick="activateReportHistory()">Activer la protection sur ce projet</button>`:'La direction peut finaliser la protection après la mise à jour des écrans.'}</div>`;
+  if(s.enforced===true)h+='<p class="history-secured">Historique protégé · modifications motivées et versions contrôlées.</p>';
+  if(s.loading)h+='<p>Chargement de l’historique…</p>';
+  if(s.error)h+=`<p class="history-error">${escHtml(s.error)}</p>`;
+  if(!s.loading&&!s.error&&!s.rows.length)h+='<p>Aucune version conservée pour cette date.</p>';
+  if(s.rows.length){
+    h+=`<div class="history-scroll"><table class="tb"><thead><tr><th>Version</th><th>Événement</th><th>Enregistré par la base</th><th>Compte</th><th>Motif</th></tr></thead><tbody>${s.rows.map(r=>`<tr><td>v${r.version}</td><td>${escHtml(historyOperation(r))}${r.write_source==='legacy'?'<br><small>Ancien parcours</small>':''}</td><td>${escHtml(historyTime(r.recorded_at))}</td><td>${escHtml(r.operation==='baseline'?'Compte initial non attesté':r.actor_label||r.actor_id||'Non disponible')}</td><td>${escHtml(r.reason)}</td></tr>`).join('')}</tbody></table></div>`;
+    if(s.more)h+=`<button class="bs" ${s.loading?'disabled':''} onclick="openReportHistory('${s.date}',true)">Charger les versions plus anciennes</button>`;
+    const options=selected=>s.rows.map(r=>`<option value="${r.version}" ${selected===r.version?'selected':''}>v${r.version} — ${escHtml(historyOperation(r))}</option>`).join('');
+    if(s.rows.length>=2){
+      h+=`<div class="history-controls"><label>Version de référence<select class="fi" onchange="selectHistoryVersion('before',this.value)">${options(s.before)}</select></label><label>Version comparée<select class="fi" onchange="selectHistoryVersion('after',this.value)">${options(s.after)}</select></label></div><label class="saisie-note"><input type="checkbox" ${s.includeMeta?'checked':''} onchange="REPORT_HISTORY.includeMeta=this.checked;draw()"> Inclure les métadonnées de validation de l’application</label>`;
+      const a=s.rows.find(r=>r.version===s.before),b=s.rows.find(r=>r.version===s.after),diff=historyDiff(a?.payload,b?.payload,s.includeMeta);
+      if(a?.operation==='delete'||b?.operation==='delete')h+='<p>Une suppression conserve le dernier contenu pour consultation ; elle n’efface pas l’historique.</p>';
+      h+=diff.length?`<div class="history-scroll"><table class="tb history-diff"><thead><tr><th>Champ</th><th>v${s.before}</th><th>v${s.after}</th></tr></thead><tbody>${diff.map(c=>`<tr><td>${escHtml(historyFieldLabel(c.path))}</td><td>${escHtml(historyValue(c.before))}</td><td>${escHtml(historyValue(c.after))}</td></tr>`).join('')}</tbody></table></div>`:'<p>Aucune différence dans les champs affichés.</p>';
+    }else h+='<p>Une seule version disponible : aucune comparaison antérieure possible.</p>';
+    const current=s.rows.find(r=>r.version===s.after)||s.rows[0];h+=`<details><summary>Contenu complet conservé — v${current.version}</summary><pre class="history-json">${escHtml(JSON.stringify(current.payload,null,2))}</pre></details>`;
+  }
+  return h+'</section></div>';
+}
+
 function auditLog(action,target,after){try{if(!isConfigured())return;sb.from('audit_events').insert({project_id:ACTIVE_PROJECT_ID,actor_id:SESSION.user.id,action,target:String(target||''),after:after||null}).then(()=>{},()=>{});}catch(e){}}
 async function syncSave(d,data){
+  if(!d.startsWith('__'))return saveReportWithHistory(d,data);
   if(!canWrite()){toast('Lecture seule : ce rôle ne peut pas enregistrer.');return false;}
   if(d==='__finance_summary__'&&!canAccessFinance()){toast('Synthèse financière réservée à la direction et au conducteur de travaux.');return false;}
   if(!isConfigured()){toast('Non connecté à la base : rien n’a été enregistré.');return false;}
   if(syncing){toast('Un enregistrement est déjà en cours.');return false;}
   const pid=ACTIVE_PROJECT_ID;syncing=true;
-  document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=true);
-  let ok=false,message='';
-  try{
-    if(d.startsWith('__')){
-      const r=await sb.from('project_state').upsert({project_id:ACTIVE_PROJECT_ID,key:stateKeyOf(d),value:data,updated_by:SESSION.user.id},{onConflict:'project_id,key'});
-      if(r.error)throw r.error;ok=true;
-    }else{
-      const draft=readReportDraft(d);
-      const expected=draft?draft.baseVersion:DB_VERSIONS[d];
-      if(expected){
-        const r=await sb.from('daily_reports').update({payload:data,author_id:SESSION.user.id}).eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d).eq('version',expected).select('version');
-        if(r.error)throw r.error;
-        if(r.data&&r.data.length){DB_VERSIONS[d]=r.data[0].version||expected+1;ok=true;}
-        else{
-          const cur=await sb.from('daily_reports').select('version,updated_at').eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d).maybeSingle();
-          if(cur.data){message=`Conflit : le rapport du ${fD(d)} a été modifié par un autre utilisateur (version ${cur.data.version}, ${new Date(cur.data.updated_at).toLocaleString('fr-FR')}). Rechargez la page, puis réenregistrez.`;}
-          else{message='Le rapport a été supprimé ou est devenu inaccessible. Rechargez les données avant toute nouvelle saisie.';}
-        }
-      }else{
-        const ins=await sb.from('daily_reports').insert({project_id:ACTIVE_PROJECT_ID,report_date:d,payload:data,author_id:SESSION.user.id}).select('version');
-        if(ins.error){if(ins.error.code==='23505'){const cur=await sb.from('daily_reports').select('version').eq('project_id',ACTIVE_PROJECT_ID).eq('report_date',d).maybeSingle();message=`Conflit : un rapport existe déjà pour le ${fD(d)} (version ${cur.data?.version||'?'}), créé par un autre utilisateur. Rechargez la page pour le voir avant de modifier.`;}else throw ins.error;}
-        else{DB_VERSIONS[d]=ins.data?.[0]?.version||1;ok=true;}
-      }
-    }
-    if(ok&&pid===ACTIVE_PROJECT_ID){db[d]=data;online=true;lastSync=stamp();if(!d.startsWith('__'))auditLog('report.save',d,{version:DB_VERSIONS[d]||null,corrections:typeof countNegativeMovements==='function'?countNegativeMovements(data):null});}
-  }catch(e){message='Enregistrement refusé par la base : '+(e?.message||e);online=false;}
-  if(!ok)toast((message||'Enregistrement impossible.')+' Votre brouillon est conservé.');
-  syncing=false;document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=false);return ok;
+  try{const r=await sb.from('project_state').upsert({project_id:pid,key:stateKeyOf(d),value:data,updated_by:SESSION.user.id},{onConflict:'project_id,key'});if(r.error)throw r.error;if(pid===ACTIVE_PROJECT_ID){db[d]=data;online=true;lastSync=stamp();}return true;}
+  catch(e){toast('Enregistrement refusé par la base : '+(e?.message||e));return false;}
+  finally{syncing=false;}
 }
 async function syncDel(d){
+  if(!d.startsWith('__'))return deleteReportWithHistory(d);
   if(syncing||CONFIG_SAVING)return false;
   if(!canWrite()){toast('Lecture seule : suppression impossible.');return false;}
   if(!isConfigured()){toast('Non connecté à la base : rien n’a été supprimé.');return false;}
@@ -1506,9 +1611,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.11</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.5.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.11</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.5.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -1829,6 +1934,7 @@ function pgSaisie(){
       <div style="flex:1"></div>
       <span style="font-size:10px;color:#8a95a5;font-style:italic">Références contractuelles gérées dans Paramétrage</span>
     </div><div id="correction_fields" style="display:${reportKind==='correction'?'block':'none'};margin-top:12px;padding-top:12px;border-top:1px solid #eef1f6"><label class="fl">Motif obligatoire de la correction</label><textarea class="fi" id="correction_reason" rows="2" placeholder="Ex. Correction du cumul après contrôle contradictoire terrain">${escHtml(correctionReason)}</textarea><div style="font-size:10px;color:#8a95a5;margin-top:5px">Les quantités négatives ne sont autorisées que dans ce mode. Elles corrigent le cumul et ne représentent pas une production négative.</div></div></div>
+    ${renderRevisionReason(ex)}
     <div class="saisie-section-switch no-print" role="tablist">
       <button type="button" data-saisie-section="preparation" class="${SAISIE_SECTION==='preparation'?'is-active':''}" onclick="setSaisieSection('preparation')">Préparation terrain</button>
       <button type="button" data-saisie-section="network" class="${SAISIE_SECTION==='network'?'is-active':''}" onclick="setSaisieSection('network')">Production réseau</button>
@@ -2165,7 +2271,7 @@ function weeklyModel(anchor,now=today(),zone=null){
 }
 function weeklyFormat(n){return Number.isFinite(n)?n.toLocaleString('fr-FR',{maximumFractionDigits:2}):'—';}
 function weeklyQuantity(m,key){if(key==='production'||key==='sunday')return m.known?weeklyFormat(m[key]):'—';return m.known||m.correctionKnown?weeklyFormat(m[key]):'—';}
-function weeklyRate(m){return m.rate===null?'—':weeklyFormat(m.rate)+(m.complete?'':' *');}
+function weeklyRate(m){return m.rate===null?'—':weeklyFormat(m.rate);}
 function weeklyText(model){
   const m=model,label=m.zone===null?'Projet complet':'Zone '+m.zone;
   const lines=[`*${projectShortName()} — PERFORMANCE HEBDOMADAIRE*`,`Du ${fD(m.monday)} au ${fD(m.sunday)}`,label];
@@ -2184,7 +2290,7 @@ function weeklyText(model){
   });
   if(m.constraints.length){lines.push('','*CONTRAINTES ET ACTIONS SIGNALÉES*');m.constraints.forEach(c=>lines.push(`• ${fD(c.date)} · ${c.localite==='tous'?'Chantier':LOC.find(l=>l.id===c.localite)?.nm||c.localite} : ${c.observation||'Fait non précisé'}${c.action?' — Action : '+c.action:''}`));}
   lines.push('','Cadence = production déclarée, dimanche inclus, divisée par les jours de référence du lundi au samedi. Arrêts et jours sans rapport restent dans le dénominateur.');
-  lines.push('* = cadence provisoire ; — = donnée insuffisante. Un jour sans rapport ne signifie pas un arrêt. Zéro signifie aucune nouvelle quantité déclarée pour l’activité.');
+  lines.push('Cadences provisoires lorsque les données sont incomplètes ; — = donnée insuffisante. Un jour sans rapport ne signifie pas un arrêt. Zéro signifie aucune nouvelle quantité déclarée pour l’activité.');
   lines.push('Ouvrages : regards suivis dans l’application ; finitions réalisées = terminé. La réception ultérieure ne compte pas comme un nouvel ouvrage.');
   if(m.warnings.length){lines.push('','*POINTS À VÉRIFIER*');m.warnings.forEach(w=>lines.push('• '+w));}
   return lines.join('\n');
@@ -2201,8 +2307,8 @@ function pgWeekly(embedded=false){
   const m=weeklyModel(state.date,today(),state.zone);
   let h=`<div class="${embedded?'weekly-embedded':'mn'}"><div class="st">Performance hebdomadaire</div><div class="cd weekly-controls no-print"><div><label class="fl" for="weekly_date">Une date dans la semaine</label><input class="fi" type="date" id="weekly_date" value="${m.monday}" max="${today()}" onchange="setWeeklyDate(this.value)"></div><div><label class="fl" for="weekly_zone">Périmètre</label><select class="fi" id="weekly_zone" onchange="setWeeklyZone(this.value)"><option value="">Projet complet</option>${ZN.map((z,i)=>`<option value="${i}" ${m.zone===z?'selected':''}>Zone ${escHtml(z)}</option>`).join('')}</select></div><button class="bs" onclick="stepWeekly(-1)">← Précédente</button><button class="bs" onclick="stepWeekly(1)" ${weeklyShift(m.monday,7)>today()?'disabled':''}>Suivante →</button><button class="bs" onclick="setWeeklyDate(weeklyDefault())">Dernière semaine close</button></div>`;
   h+=`<div class="cd weekly-period"><b>Du ${fD(m.monday)} au ${fD(m.sunday)} · ${m.zone===null?'Projet complet':'Zone '+escHtml(m.zone)}</b><span class="kb ${m.complete?'bg':'bo'}">${m.complete?'Saisies complètes':'Données incomplètes · provisoire'}</span><p>${m.ongoing?'Situation arrêtée au '+fD(m.to)+' · ':''}${m.start?m.expected.length+' jours de référence écoulés (lundi–samedi)':'Date de début à renseigner pour calculer les cadences'} · ${m.reported.length}/${m.expected.length} rapports de production couvrant toutes les localités.</p>${m.physicalAfter!==null?`<p>Avancement physique : <b>${weeklyFormat(m.physicalBefore)} % → ${weeklyFormat(m.physicalAfter)} %</b> · Variation incluant les corrections.</p>`:''}</div>`;
-  h+=`<div class="weekly-kpis">${WEEKLY_ACTIVITIES.map(a=>{const x=m.totals[a.key],label={pose:'Cadence de pose',ess:'Cadence des essais',gc:'Cadence des ouvrages'}[a.key];return`<div class="kc weekly-cadence-card" data-activity="${a.key}"><div class="kl">${label}</div><div class="kv weekly-cadence-value">${x.applicable?weeklyRate(x):'—'}<span class="ku">${a.unit}/j</span></div><div class="ksb">${x.applicable?'Moyenne journalière sur la semaine'+(x.rate!==null&&!x.complete?' · provisoire':''):'Non applicable à ce périmètre'}</div>${x.applicable?`<div class="weekly-production">Production de la période : <b>${weeklyQuantity(x,'production')} ${a.unit}</b></div><div class="weekly-kpi-detail">Corrections : ${weeklyQuantity(x,'corrections')} ${a.unit}<br>Bilan net : ${weeklyQuantity(x,'net')} ${a.unit}<br>Dont dimanche : ${weeklyQuantity(x,'sunday')} ${a.unit}<br>Jours renseignés pour toutes les localités : ${x.covered.length}/${m.expected.length}</div>`:''}</div>`;}).join('')}</div>`;
-  h+=`${embedded?'<details class="cd weekly-notes"><summary>Règles de calcul et lecture des cadences</summary>':'<div class="cd weekly-notes"><b>Lecture des cadences</b>'}<p>Production déclarée de la période, dimanche inclus, divisée par les jours de référence du lundi au samedi. Les arrêts et les jours sans rapport restent dans le dénominateur ; aucun jour férié n’est retranché automatiquement.</p><p><b>*</b> Cadence provisoire · <b>—</b> Donnée insuffisante. Une absence de rapport ne signifie pas un arrêt. Un zéro signifie aucune nouvelle quantité déclarée pour cette activité.</p><p>Ouvrages : regards suivis dans l’application. Les finitions réalisées marquent l’achèvement ; la réception ultérieure n’ajoute pas un nouvel ouvrage. Les étapes intermédiaires restent visibles ci-dessous.</p>${embedded?'</details>':'</div>'}`;
+  h+=`<div class="weekly-kpis">${WEEKLY_ACTIVITIES.map(a=>{const x=m.totals[a.key],label={pose:'Pose de conduites',ess:'Essais',gc:'Ouvrages'}[a.key];return`<div class="kc weekly-cadence-card" data-activity="${a.key}"><div class="kl">${label}</div><div class="weekly-production"><div class="weekly-metric-label">Production de la semaine</div><div class="kv weekly-production-value">${x.applicable?weeklyQuantity(x,'production'):'—'}<span class="ku">${a.unit}</span></div></div><div class="weekly-cadence"><div class="weekly-metric-label">Cadence journalière</div><div class="kv weekly-cadence-value">${x.applicable?weeklyRate(x):'—'}<span class="ku">${a.unit}/j</span></div></div><div class="ksb">${x.applicable?'Moyenne journalière sur la semaine'+(x.rate!==null&&!x.complete?' · provisoire':''):'Non applicable à ce périmètre'}</div>${x.applicable?`<div class="weekly-kpi-detail">Corrections : ${weeklyQuantity(x,'corrections')} ${a.unit}<br>Bilan net : ${weeklyQuantity(x,'net')} ${a.unit}<br>Dont dimanche : ${weeklyQuantity(x,'sunday')} ${a.unit}<br>Jours renseignés pour toutes les localités : ${x.covered.length}/${m.expected.length}</div>`:''}</div>`;}).join('')}</div>`;
+  h+=`${embedded?'<details class="cd weekly-notes"><summary>Règles de calcul et lecture des cadences</summary>':'<div class="cd weekly-notes"><b>Lecture des cadences</b>'}<p>Production déclarée de la période, dimanche inclus, divisée par les jours de référence du lundi au samedi. Les arrêts et les jours sans rapport restent dans le dénominateur ; aucun jour férié n’est retranché automatiquement.</p><p>Cadences provisoires lorsque les données sont incomplètes · <b>—</b> Donnée insuffisante. Une absence de rapport ne signifie pas un arrêt. Un zéro signifie aucune nouvelle quantité déclarée pour cette activité.</p><p>Ouvrages : regards suivis dans l’application. Les finitions réalisées marquent l’achèvement ; la réception ultérieure n’ajoute pas un nouvel ouvrage. Les étapes intermédiaires restent visibles ci-dessous.</p>${embedded?'</details>':'</div>'}`;
   if(m.warnings.length)h+=`<div class="cd weekly-warnings"><b>Points à vérifier avant diffusion</b><ul>${m.warnings.map(w=>`<li>${escHtml(w)}</li>`).join('')}</ul></div>`;
   [...new Set(m.rows.map(r=>r.zone))].forEach(z=>{h+=`<div class="cd"><div class="ct">Zone ${escHtml(z)}</div>${weeklyTable(m.rows.filter(r=>r.zone===z))}</div>`;});
   h+=`<details class="cd"><summary>Couverture des journées et étapes des ouvrages</summary>${m.rows.map(r=>`<div class="weekly-coverage"><b>${escHtml(r.name)}</b><p>${r.missing.length?'Sans rapport de production : '+r.missing.map(fD).join(', '):m.expected.length?'Rapports de production présents pour les journées attendues.':'Aucune journée attendue écoulée.'}</p>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>`<span>${a.label} : ${r.metrics[a.key].covered.filter(d=>m.expected.includes(d)).length}/${m.expected.length} jours renseignés</span>`).join(' · ')}${r.gcUpdates.length?`<ul>${r.gcUpdates.map(u=>`<li>${fD(u.date)} · ${escHtml(u.id)} : ${escHtml(stageLabel(u.stage))}${u.correction?' (correction)':''}</li>`).join('')}</ul>`:''}</div>`).join('')}</details>`;
@@ -2211,7 +2317,7 @@ function pgWeekly(embedded=false){
   return h;
 }
 
-function pgRapport(){return pgDailyRapport();}
+function pgRapport(){const body=pgDailyRapport();return (canReadReportHistory()?`<div class="mn history-toolbar no-print"><button class="bs" onclick="openReportHistory()">Historique des versions</button><span>${DB_VERSIONS[SD]?'Rapport affiché : v'+DB_VERSIONS[SD]:''}</span></div>`:'')+body+renderReportHistory();}
 
 // ── RAPPORT (détail DN, pas de graphiques) ──
 function pgDailyRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cumul(SD);
@@ -3746,7 +3852,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.11 — Cadences hebdomadaires mises en avant, 24/09/2026' ,
+      version_app:'2.5.1 — Historique des versions et motifs de modification, 24/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4702,14 +4808,28 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .monthly-gc-state span{display:block;color:#64748b;margin-top:4px}
 
 
-.weekly-cadence-card .weekly-cadence-value{font-size:36px;font-weight:750;line-height:1.2;color:#2c7be5;margin:10px 0}
-.weekly-cadence-card:nth-child(2) .weekly-cadence-value{color:#21875f}
-.weekly-cadence-card:nth-child(3) .weekly-cadence-value{color:#7257d6}
-.weekly-cadence-value .ku{font-size:16px;font-weight:600;margin-left:6px;white-space:nowrap}
-.weekly-production{font-size:13px;color:#526175;margin-top:14px;line-height:1.5}
+.weekly-cadence-card{--weekly-color:#2c7be5}
+.weekly-cadence-card:nth-child(2){--weekly-color:#21875f}
+.weekly-cadence-card:nth-child(3){--weekly-color:#7257d6}
+.weekly-cadence-card .weekly-cadence-value,.weekly-cadence-card .weekly-production-value{font-size:36px;font-weight:750;line-height:1.2;color:var(--weekly-color);margin:8px 0;overflow-wrap:anywhere}
+.weekly-cadence-value .ku,.weekly-production-value .ku{font-size:16px;font-weight:600;margin-left:6px;white-space:nowrap}
+.weekly-production{margin-top:16px}
+.weekly-cadence{border-top:1px solid #edf0f4;margin-top:16px;padding-top:14px}
+.weekly-metric-label{font-size:13px;font-weight:600;color:#526175;line-height:1.5}
 .weekly-cadence-cell{font-weight:700;color:#1d5db5;background:#f3f7fd}
-@media(max-width:700px){.weekly-cadence-card .weekly-cadence-value{font-size:34px}}
+@media(max-width:700px){.weekly-cadence-card .weekly-cadence-value,.weekly-cadence-card .weekly-production-value{font-size:34px}}
 
+
+.history-toolbar{display:flex;align-items:center;gap:12px;padding-top:16px;padding-bottom:0;font-size:12px;color:#64748b}
+.history-heading,.history-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.history-controls{justify-content:flex-start;margin:14px 0}.history-controls label{font-size:12px;color:#526175}
+.history-controls .fi{min-width:180px;margin-top:5px}.history-scroll{overflow-x:auto;margin:14px 0}
+.report-history .tb{min-width:680px}.report-history td{white-space:pre-wrap;overflow-wrap:anywhere;max-width:420px}
+.history-diff td:nth-child(2){background:#fff6f1}.history-diff td:nth-child(3){background:#f0faf3}
+.history-json{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:420px;overflow:auto;background:#f5f7fa;padding:14px}
+.history-notice{border-left:4px solid #f5a623;background:#fffaf0;padding:14px;font-size:12px;line-height:1.5}
+.history-secured{color:#23835d;font-size:12px}.history-error{color:#b42318}.report-revision-reason{border-left:4px solid #2c7be5}
+@media(max-width:700px){.history-controls label,.history-controls .fi{width:100%}}
 </style>
 </body>
 </html>
