@@ -747,7 +747,7 @@ function historyDiff(before,after,includeMeta=false){
   visit(before,after,[]);return changes;
 }
 function historyFieldLabel(path){
-  const labels={loc:'Terrain',zones:'Tronçon',s:'Soudure (ml)',f:'Fouille (ml)',r:'Pose (ml)',ess:'Essais (ml)',barDay:'Bardage du jour (ml)',bar:'Bardage cumulé (ml)',topoDay:'Implantation du jour (ml)',roadAreaDay:'Ouverture de voie (m²)',imp:'Implantation cumulée',gc:'Ancien cumul GC',eff:'Effectifs',finitions:'Finitions',regards:'Regards',stage:'Étape',gcMeta:'Observation GC',rincage:'Rinçage',recolement:'Récolement',contraintes:'Contraintes',rmq:'Remarques',mobilisation:'Mobilisation',rate:'Taux (%)',correctionReason:'Motif de correction des quantités',kind:'Nature de la saisie',validation:'Métadonnées de validation',logistique:'Logistique',note:'Observation',reference:'Référence',p:'Observation terrain'};
+  const labels={entryStatus:'État de saisie par localité',loc:'Terrain',zones:'Tronçon',s:'Soudure (ml)',f:'Fouille (ml)',r:'Pose (ml)',ess:'Essais (ml)',barDay:'Bardage du jour (ml)',bar:'Bardage cumulé (ml)',topoDay:'Implantation du jour (ml)',roadAreaDay:'Ouverture de voie (m²)',imp:'Implantation cumulée',gc:'Ancien cumul GC',eff:'Effectifs',finitions:'Finitions',regards:'Regards',stage:'Étape',gcMeta:'Observation GC',rincage:'Rinçage',recolement:'Récolement',contraintes:'Contraintes',rmq:'Remarques',mobilisation:'Mobilisation',rate:'Taux (%)',correctionReason:'Motif de correction des quantités',kind:'Nature de la saisie',validation:'Métadonnées de validation',logistique:'Logistique',note:'Observation',reference:'Référence',p:'Observation terrain'};
   const l=path[0]==='loc'?LOC.find(l=>l.id===path[1]):null;
   return path.map((k,i)=>{if(l&&i===1)return l.nm;if(l&&path[i-1]==='zones')return l.zones.find(z=>z.zid===k)?.nm||k;if(l&&i===4&&path[2]==='zones')return 'DN '+k;if(path[0]==='eff'&&i===2)return {f:'Fouilleurs',s:'Soudeurs',n:'Observation'}[k]||k;return labels[k]||LOC.find(l=>l.id===k)?.nm||k;}).join(' · ');
 }
@@ -757,7 +757,7 @@ function historyOperation(row){return {baseline:'État repris',create:'Création
 function renderReportHistory(){
   if(!canReadReportHistory())return '';
   const s=REPORT_HISTORY;if(!s||s.pid!==ACTIVE_PROJECT_ID)return '';
-  let h=`<div class="mn"><section class="cd report-history"><div class="history-heading"><div class="ct">Historique des versions</div><button class="bs" onclick="closeReportHistory()">Fermer</button></div><div class="history-controls"><label>Date du rapport<input class="fi" type="date" value="${s.date}" max="${today()}" onchange="openReportHistory(this.value)"></label><button class="bs" onclick="openReportHistory('${s.date}')">Actualiser l’historique</button></div><p class="saisie-note">Horodatages enregistrés par la base. Un compte partagé identifie le compte utilisé, pas la personne physique. Les états repris ne reconstituent pas les anciennes versions perdues.</p>`;
+  let h=`<div class="mn no-print"><section class="cd report-history"><div class="history-heading"><div class="ct">Historique des versions</div><button class="bs" onclick="closeReportHistory()">Fermer</button></div><div class="history-controls"><label>Date du rapport<input class="fi" type="date" value="${s.date}" max="${today()}" onchange="openReportHistory(this.value)"></label><button class="bs" onclick="openReportHistory('${s.date}')">Actualiser l’historique</button></div><p class="saisie-note">Horodatages enregistrés par la base. Un compte partagé identifie le compte utilisé, pas la personne physique. Les états repris ne reconstituent pas les anciennes versions perdues.</p>`;
   if(s.enforced===false)h+=`<div class="history-notice"><b>Archivage actif — anciens écrans encore autorisés</b><p>Les changements sont conservés, mais un ancien écran peut encore enregistrer sans motif.</p>${currentRole()==='direction'?`<p>Après installation de cette version et actualisation des écrans de saisie, activez la protection pour imposer le contrôle de version et un motif à chaque modification.</p><button class="bp" ${s.loading?'disabled':''} onclick="activateReportHistory()">Activer la protection sur ce projet</button>`:'La direction peut finaliser la protection après la mise à jour des écrans.'}</div>`;
   if(s.enforced===true)h+='<p class="history-secured">Historique protégé · modifications motivées et versions contrôlées.</p>';
   if(s.loading)h+='<p>Chargement de l’historique…</p>';
@@ -1114,6 +1114,8 @@ function mobilisationAttacheeSummary(){
 // Le statut de diffusion décrit le rapport sauvegardé, jamais son brouillon local.
 function canValidateFieldReport(){return isAdminUser()||['direction','conducteur_travaux'].includes(currentRole());}
 function fieldReportStatus(report){
+  if(LOC.some(l=>entryStatus(report,l.id)==='pending'))return{label:'Enregistré — à compléter',wa:'DONNÉES PARTIELLES',cls:'bo'};
+  if(LOC.some(l=>entryStatus(report,l.id)==='legacy'))return{label:'Enregistré — complétude non confirmée',wa:'COMPLÉTUDE NON CONFIRMÉE',cls:'bo'};
   const status=report?.validation?.status;
   if(status==='validated')return{label:'Validé pour diffusion',wa:'VALIDÉ POUR DIFFUSION',cls:'bg'};
   if(status==='verified')return{label:'Vérifié',wa:'VÉRIFIÉ',cls:'bbl'};
@@ -1181,7 +1183,7 @@ function reportDailyActivities(report,locs,date=SD){
 }
 function renderDailyActivities(zone,locs,report){
   const rows=reportDailyActivities(report,locs);
-  return `<div class="cd"><div class="ct">Activités du jour — Zone ${escHtml(zone)}</div>${rows.length?`<div style="overflow-x:auto"><table class="tb"><thead><tr><th>Localité</th><th>Activité</th><th>Réalisation du jour / état constaté</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escHtml(r.localite)}</td><td><b>${escHtml(r.type)}</b></td><td>${escHtml(r.detail)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="report-empty">Aucune activité physique renseignée pour cette zone à cette date.</div>'}</div>`;
+  return `<div class="cd"><div class="ct">Activités du jour — Zone ${escHtml(zone)}</div>${rows.length?`<div style="overflow-x:auto"><table class="tb"><thead><tr><th>Localité</th><th>Activité</th><th>Réalisation du jour / état constaté</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escHtml(r.localite)}</td><td><b>${escHtml(r.type)}</b></td><td>${escHtml(r.detail)}</td></tr>`).join('')}</tbody></table></div>`:`<div class="report-empty">${locs.map(l=>escHtml(l.nm)+' : '+escHtml(entryEmptyText(report,l.id))).join('<br>')}</div>`}</div>`;
 }
 
 function countNegativeMovements(report){
@@ -1611,9 +1613,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.5.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.6.0</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.5.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.6.0</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -1792,14 +1794,14 @@ function pgSaisiePreparation(ex,cuBefore,reportKind){
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#6366f1':'#7c6df2'}"></span> Préparation — Zone ${escHtml(zone)}</div>`;
     locs.forEach(loc=>{
       const exL=ex?.loc?.[loc.id]||{},cuL=cuBefore?.[loc.id]||{};
-      h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>Implantation topo du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
+      h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>Implantation topo du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
       h+=`<div class="road-opening-entry"><label for="road_${loc.id}">Ouverture de voie du jour (m²)<input type="number" class="ci movement-input" id="road_${loc.id}" value="${typeof exL.roadAreaDay==='number'&&Number.isFinite(exL.roadAreaDay)?exL.roadAreaDay:''}" ${reportKind==='production'?'min="0"':''} step=".01" inputmode="decimal" placeholder="Non renseigné"></label><div><b>Cumul avant rapport : ${cuL.roadAreaKnown?fmtArea(cuL.roadArea)+' m²':'non renseigné'}</b><small>Surface réellement ouverte pour ce front, calculée selon la largeur retenue sur le projet. À saisir une seule fois, tous DN confondus. Distincte de la fouille de tranchée ; hors indice physique.</small></div></div>`;
       loc.zones.forEach(zn=>{
         const exZ=exL.zones?.[zn.zid]||{};
         h+=`<div class="prep-zone"><div class="zn-label"><span class="zn-tag">${escHtml(zn.nm||'Tronçon unique')}</span><span class="zn-tot">Bardage du jour par DN</span></div><table class="tb prep-table"><thead><tr><th>DN</th><th class="nr">Prévu</th><th class="nr">Cumul avant rapport</th><th class="nr">Bardage du jour</th></tr></thead><tbody>`;
         Object.keys(zn.dn).sort((a,b)=>+a-+b).forEach(dn=>{
           const exD=exZ[dn]||{},before=cuL.zones?.[zn.zid]?.dn?.[dn]?.bar||0;
-          h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td><td class="nr">${fmt(zn.dn[dn])}</td><td class="nr">${fmt(before)}</td><td><input type="number" class="ci movement-input" id="bar_${loc.id}_${zn.zid}_${dn}" value="${exD.barDay||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;
+          h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td><td class="nr">${fmt(zn.dn[dn])}</td><td class="nr">${fmt(before)}</td><td><input type="number" class="ci movement-input" id="bar_${loc.id}_${zn.zid}_${dn}" value="${exD.barDay??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;
         });
         h+=`</tbody></table></div>`;
       });
@@ -1918,6 +1920,60 @@ function renderReportFinishing(rp){
   if(!rows.length)return'';
   return`<div class="st">Finitions, ouvrages et réception</div><div class="cd"><div class="ct">États constatés ce jour</div><div style="overflow-x:auto"><table class="tb"><thead><tr><th>Type</th><th>Localité</th><th>Ouvrage / portée</th><th>État constaté</th><th>Observation / référence</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${escHtml(r.type)}</b></td><td>${escHtml(r.localite)}</td><td>${escHtml(r.ouvrage)}</td><td><span class="finish-current">${escHtml(r.etat)}</span></td><td>${r.note?escHtml(r.note):''}${r.note&&r.reference?' · ':''}${r.reference?escHtml(r.reference):'—'}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
+// États déclaratifs de complétude : ils ne constituent pas un visa de contrôle.
+const ENTRY_STATUS={pending:'À compléter',complete:'Renseigné',idle:'Pas d’activité',legacy:'Ancien rapport — état non confirmé'};
+function entryStatus(report,lid){const v=report?.entryStatus?.[lid];return ['pending','complete','idle'].includes(v)?v:'legacy';}
+function entryConfirmed(report,lid){return ['complete','idle'].includes(entryStatus(report,lid));}
+function renderEntryStatus(ex){return `<div class="cd entry-status-panel"><div class="ct">Point de saisie par tronçon / localité</div><p class="saisie-note">Choisissez « Renseigné » après vérification de toutes les activités : les champs de quantité laissés vides seront alors considérés à zéro. « À compléter » conserve les quantités disponibles sans confirmer les autres. « Pas d’activité » confirme une journée sans travaux déclarés.</p><div class="entry-status-grid">${LOC.map(l=>{const state=ex?entryStatus(ex,l.id):'pending';return `<label class="entry-status-item"><b>${escHtml(l.nm)}</b><select class="fi" id="entry_status_${l.id}">${Object.entries(ENTRY_STATUS).filter(([k])=>k!=='legacy'||state==='legacy').map(([k,v])=>`<option value="${k}" ${state===k?'selected':''}>${v}</option>`).join('')}</select></label>`;}).join('')}</div></div>`;}
+function applyEntryStatus(data){
+ data.entryStatus={};
+ for(const l of LOC){
+  const value=document.getElementById('entry_status_'+l.id)?.value||'pending';
+  if(['pending','complete','idle'].includes(value))data.entryStatus[l.id]=value;
+  const confirmed=['complete','idle'].includes(value);
+  for(const z of l.zones)for(const dn of Object.keys(z.dn)){
+   const cell=data.loc[l.id].zones[z.zid][dn];
+   for(const key of ['s','f','r','ess']){
+    const el=document.getElementById(`${key}_${l.id}_${z.zid}_${dn}`);
+    if(!el){delete cell[key];continue;}
+    if(!confirmed&&el.value==='')delete cell[key];
+   }
+  }
+ }
+ return data;
+}
+function entryStatusError(data){
+ for(const l of LOC){
+  if(entryStatus(data,l.id)==='idle'&&reportDailyActivities(data,[l],SD).length)return `${l.nm} : « Pas d’activité » est incompatible avec les quantités ou états de travaux saisis. Corrigez la saisie ou choisissez « Renseigné » / « À compléter ».`;
+ }
+ return '';
+}
+function entryNotice(report,locs=LOC){
+ const pending=locs.filter(l=>entryStatus(report,l.id)==='pending');
+ const legacy=locs.filter(l=>entryStatus(report,l.id)==='legacy');
+ return [pending.length?'Données en attente : '+pending.map(l=>l.nm).join(', ')+'. Les résultats restent partiels.':'',legacy.length?'Ancien rapport : complétude non confirmée pour '+legacy.map(l=>l.nm).join(', ')+'. Les zéros historiques ne confirment pas une absence d’activité.':''].filter(Boolean);
+}
+function entryEmptyText(report,lid){return {idle:'Pas d’activité ce jour',pending:'Données en attente',complete:'Aucune quantité de travaux déclarée ce jour',legacy:'Aucune activité renseignée — absence d’activité non confirmée'}[entryStatus(report,lid)];}
+function entryReportNotice(report){const notes=entryNotice(report);return notes.length?`<div class="cd entry-report-notice">${notes.map(n=>`<p>${escHtml(n)}</p>`).join('')}</div>`:'';}
+function confirmReportReview(data,messages){
+ const lines=[`RÉCAPITULATIF DU ${fD(SD)}`,''];
+ for(const l of LOC){
+  const state=entryStatus(data,l.id),rows=reportDailyActivities(data,[l],SD);
+  lines.push(l.nm+' — '+ENTRY_STATUS[state]);
+  if(rows.length)lines.push(...rows.map(r=>'  • '+r.type+' : '+r.detail));
+  else lines.push('  '+entryEmptyText(data,l.id));
+  const eff=data.eff?.[l.id];if(eff&&(eff.f||eff.s))lines.push(`  Effectifs : ${eff.f||0} fouilleurs ; ${eff.s||0} poseurs / soudeurs`);
+ }
+ if(data.mobilisation)lines.push('Mobilisation : '+data.mobilisation.rate+' %');
+ if(data.contraintes.length)lines.push('Contraintes : '+data.contraintes.map(c=>(LOC.find(l=>l.id===c.localite)?.nm||'Chantier')+' — '+c.observation+(c.action?' / Action : '+c.action:'')).join('\n'));
+ if(data.rmq&&data.rmq!=='RAS')lines.push('Remarques : '+data.rmq);
+ const reason=reportRevisionReason();if(reason)lines.push('Motif de modification : '+reason);
+ lines.push('',...entryNotice(data));
+ if(messages.length)lines.push('','POINTS À VÉRIFIER',...messages.map(m=>'• '+m));
+ lines.push('','OK : confirmer ces informations et enregistrer.','Annuler : revenir à la saisie sans rien envoyer.');
+ return confirm(lines.join('\n'));
+}
+
 function pgSaisie(){
   const ex=db[SD];
   const previousDate=dbDates().filter(d=>d<SD).sort().pop()||'0000-00-00';
@@ -1935,6 +1991,7 @@ function pgSaisie(){
       <span style="font-size:10px;color:#8a95a5;font-style:italic">Références contractuelles gérées dans Paramétrage</span>
     </div><div id="correction_fields" style="display:${reportKind==='correction'?'block':'none'};margin-top:12px;padding-top:12px;border-top:1px solid #eef1f6"><label class="fl">Motif obligatoire de la correction</label><textarea class="fi" id="correction_reason" rows="2" placeholder="Ex. Correction du cumul après contrôle contradictoire terrain">${escHtml(correctionReason)}</textarea><div style="font-size:10px;color:#8a95a5;margin-top:5px">Les quantités négatives ne sont autorisées que dans ce mode. Elles corrigent le cumul et ne représentent pas une production négative.</div></div></div>
     ${renderRevisionReason(ex)}
+    ${renderEntryStatus(ex)}
     <div class="saisie-section-switch no-print" role="tablist">
       <button type="button" data-saisie-section="preparation" class="${SAISIE_SECTION==='preparation'?'is-active':''}" onclick="setSaisieSection('preparation')">Préparation terrain</button>
       <button type="button" data-saisie-section="network" class="${SAISIE_SECTION==='network'?'is-active':''}" onclick="setSaisieSection('network')">Production réseau</button>
@@ -1971,10 +2028,10 @@ function pgSaisie(){
         dns.forEach(dn=>{const exD=exZ[dn]||{};
           h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td>
             <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8a95a5">${fmt(zn.dn[dn])}</td>
-            <td class="weld-cell">${!materialTracking()||weldedZone(zn)?`<input type="number" class="ci movement-input" id="s_${loc.id}_${zn.zid}_${dn}" value="${exD.s||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0">`:''}</td>
-            <td><input type="number" class="ci movement-input" id="f_${loc.id}_${zn.zid}_${dn}" value="${exD.f||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td>
-            <td><input type="number" class="ci movement-input" id="r_${loc.id}_${zn.zid}_${dn}" value="${exD.r||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td>
-            <td><input type="number" class="ci movement-input" id="ess_${loc.id}_${zn.zid}_${dn}" value="${exD.ess||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;});
+            <td class="weld-cell">${!materialTracking()||weldedZone(zn)?`<input type="number" class="ci movement-input" id="s_${loc.id}_${zn.zid}_${dn}" value="${exD.s??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0">`:''}</td>
+            <td><input type="number" class="ci movement-input" id="f_${loc.id}_${zn.zid}_${dn}" value="${exD.f??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td>
+            <td><input type="number" class="ci movement-input" id="r_${loc.id}_${zn.zid}_${dn}" value="${exD.r??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td>
+            <td><input type="number" class="ci movement-input" id="ess_${loc.id}_${zn.zid}_${dn}" value="${exD.ess??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;});
         h+=`</tbody></table>`;
       });
       
@@ -2108,7 +2165,7 @@ function collect(){const d={loc:{},eff:{},logistique:{},finitions:{regards:{},gc
   });
   const mobilisationRaw=document.getElementById('mobilisation_rate')?.value??'';
   if(mobilisationRaw!=='')d.mobilisation={rate:Number(mobilisationRaw)};
-  d.rmq=cleanText(document.getElementById('rmq')?.value||'RAS',2000)||'RAS';return d;}
+  d.rmq=cleanText(document.getElementById('rmq')?.value||'RAS',2000)||'RAS';return applyEntryStatus(d);}
 function constraintValidationError(data){
   const incomplete=data.contraintes.find(c=>!c.observation||!c.activite||!c.effet||!c.cause);
   if(incomplete)return'Une contrainte est incomplète. Renseignez l’activité, l’effet, la cause et le fait observé.';
@@ -2126,14 +2183,15 @@ async function saveReport(showReport){
   const invalid=[...document.querySelectorAll('#report-editor input')].find(el=>el.validity&&!el.validity.valid);
   if(invalid){const panel=invalid.closest('.saisie-section-panel');if(panel)setSaisieSection(panel.dataset.sectionPanel);invalid.reportValidity();invalid.focus();return false;}
   if(!/^\d{4}-\d{2}-\d{2}$/.test(SD)||SD>today()){alert('Choisissez une date de rapport valide, au plus tard aujourd’hui.');return false;}
-  const data=collect(),error=constraintValidationError(data)||validateCorrectionMetadata(data)||reportValueError(data);
+  const data=collect(),error=constraintValidationError(data)||validateCorrectionMetadata(data)||reportValueError(data)||entryStatusError(data);
   if(error){alert(error);return false;}
   const alerts=validateSave(data),extra=reportQuantityWarnings(data);
-  const messages=[...alerts.map(a=>`${a.loc} / DN ${a.dn||''} : ${a.type}, écart ${fmt(a.excess)} m`),...extra];
-  if(messages.length&&!confirm('Points à vérifier :\n'+messages.slice(0,10).join('\n')+'\n\nConserver ces quantités et enregistrer ?'))return false;
-  data.validation=fieldReportValidation();
+  const messages=[...alerts.map(a=>`${a.loc}${a.zone?' / '+a.zone:''} / DN ${a.dn||''} : ${a.type==='R>F'?'pose supérieure à la fouille':'pose supérieure à la soudure'}, écart ${fmt(a.excess)} m`),...extra];
+  if((DB_VERSIONS[SD]||readReportDraft()?.baseVersion)&&reportRevisionReason().length<8){alert('Expliquez la modification du rapport en 8 caractères au minimum.');return false;}
+  if(!confirmReportReview(data,messages))return false;
+  data.validation=entryNotice(data).length?{status:'recorded',savedAt:new Date().toISOString(),savedBy:SESSION.user.id,method:'partial_entry'}:fieldReportValidation();
   const date=SD,ok=await syncSave(date,data);
-  if(ok){clearReportDraft(date);if(showReport)V='rapport';draw();toast(canValidateFieldReport()?'Rapport enregistré et validé pour diffusion':'Rapport enregistré dans la base centrale');}
+  if(ok){clearReportDraft(date);if(showReport)V='rapport';draw();toast(entryNotice(data).length?'Rapport enregistré — informations à compléter ou à confirmer':'Rapport enregistré dans la base centrale');}
   return ok;
 }
 
@@ -2191,7 +2249,8 @@ function weeklyModel(anchor,now=today(),zone=null){
     const after=cumul(d),isCorrection=report.kind==='correction',isSunday=weeklySunday(d);
     rows.forEach(row=>{
       const l=locs.find(l=>l.id===row.id),entry=report.loc[row.id];if(!entry)return;
-      if(!isCorrection)row.reported.push(d);
+      if(!isCorrection&&entryConfirmed(report,row.id))row.reported.push(d);
+      if(!entryConfirmed(report,row.id))warnings.add(entryStatus(report,row.id)==='pending'?'Des localités restent à compléter : les quantités connues sont conservées, la cadence reste provisoire.':'Des rapports historiques n’ont pas de confirmation de complétude ; leurs zéros ne prouvent pas un arrêt.');
       if(isCorrection&&!report.correctionReason)warnings.add('Certaines corrections historiques n’ont pas de motif documenté.');
       WEEKLY_ACTIVITIES.filter(a=>a.field).forEach(a=>{
         const metric=row.metrics[a.key];let full=true,hasCells=false;
@@ -2201,13 +2260,13 @@ function weeklyModel(anchor,now=today(),zone=null){
           weeklyAdd(metric,value,isCorrection,isSunday);
           if(value<0&&!isCorrection)warnings.add('Des valeurs négatives historiques sont classées en corrections, même sans nature « correction ».');
         }));
-        if(full&&hasCells&&!isCorrection)metric.covered.push(d);
+        if(full&&hasCells&&!isCorrection&&entryConfirmed(report,row.id))metric.covered.push(d);
       });
       if(l.regards>0){
         const metric=row.metrics.gc,updates=report.finitions?.regards?.[row.id]||{};
         // L'absence de mise à jour dans un rapport moderne signifie aucun
         // nouveau jalon déclaré, jamais un arrêt de chantier confirmé.
-        if(report.finitions?.regards&&typeof report.finitions.regards==='object'&&!isCorrection){metric.known=true;metric.covered.push(d);}
+        if(report.finitions?.regards&&typeof report.finitions.regards==='object'&&!isCorrection){if(entryStatus(report,row.id)!=='pending')metric.known=true;if(entryConfirmed(report,row.id))metric.covered.push(d);}
         Object.keys(after[row.id]?.regardStages||{}).forEach(id=>{
           const old=previous[row.id]?.regardStages?.[id]||'non_demarre',next=after[row.id].regardStages[id];
           const delta=Number(stageProgress(next)>=1)-Number(stageProgress(old)>=1);
@@ -2306,12 +2365,12 @@ function pgWeekly(embedded=false){
   const state=weeklyState();if(state.zone!==null&&!ZN.includes(state.zone))state.zone=null;
   const m=weeklyModel(state.date,today(),state.zone);
   let h=`<div class="${embedded?'weekly-embedded':'mn'}"><div class="st">Performance hebdomadaire</div><div class="cd weekly-controls no-print"><div><label class="fl" for="weekly_date">Une date dans la semaine</label><input class="fi" type="date" id="weekly_date" value="${m.monday}" max="${today()}" onchange="setWeeklyDate(this.value)"></div><div><label class="fl" for="weekly_zone">Périmètre</label><select class="fi" id="weekly_zone" onchange="setWeeklyZone(this.value)"><option value="">Projet complet</option>${ZN.map((z,i)=>`<option value="${i}" ${m.zone===z?'selected':''}>Zone ${escHtml(z)}</option>`).join('')}</select></div><button class="bs" onclick="stepWeekly(-1)">← Précédente</button><button class="bs" onclick="stepWeekly(1)" ${weeklyShift(m.monday,7)>today()?'disabled':''}>Suivante →</button><button class="bs" onclick="setWeeklyDate(weeklyDefault())">Dernière semaine close</button></div>`;
-  h+=`<div class="cd weekly-period"><b>Du ${fD(m.monday)} au ${fD(m.sunday)} · ${m.zone===null?'Projet complet':'Zone '+escHtml(m.zone)}</b><span class="kb ${m.complete?'bg':'bo'}">${m.complete?'Saisies complètes':'Données incomplètes · provisoire'}</span><p>${m.ongoing?'Situation arrêtée au '+fD(m.to)+' · ':''}${m.start?m.expected.length+' jours de référence écoulés (lundi–samedi)':'Date de début à renseigner pour calculer les cadences'} · ${m.reported.length}/${m.expected.length} rapports de production couvrant toutes les localités.</p>${m.physicalAfter!==null?`<p>Avancement physique : <b>${weeklyFormat(m.physicalBefore)} % → ${weeklyFormat(m.physicalAfter)} %</b> · Variation incluant les corrections.</p>`:''}</div>`;
+  h+=`<div class="cd weekly-period"><b>Du ${fD(m.monday)} au ${fD(m.sunday)} · ${m.zone===null?'Projet complet':'Zone '+escHtml(m.zone)}</b><span class="kb ${m.complete?'bg':'bo'}">${m.complete?'Saisies complètes':'Données incomplètes · provisoire'}</span><p>${m.ongoing?'Situation arrêtée au '+fD(m.to)+' · ':''}${m.start?m.expected.length+' jours de référence écoulés (lundi–samedi)':'Date de début à renseigner pour calculer les cadences'} · ${m.reported.length}/${m.expected.length} journées confirmées pour toutes les localités.</p>${m.physicalAfter!==null?`<p>Avancement physique : <b>${weeklyFormat(m.physicalBefore)} % → ${weeklyFormat(m.physicalAfter)} %</b> · Variation incluant les corrections.</p>`:''}</div>`;
   h+=`<div class="weekly-kpis">${WEEKLY_ACTIVITIES.map(a=>{const x=m.totals[a.key],label={pose:'Pose de conduites',ess:'Essais',gc:'Ouvrages'}[a.key];return`<div class="kc weekly-cadence-card" data-activity="${a.key}"><div class="kl">${label}</div><div class="weekly-production"><div class="weekly-metric-label">Production de la semaine</div><div class="kv weekly-production-value">${x.applicable?weeklyQuantity(x,'production'):'—'}<span class="ku">${a.unit}</span></div></div><div class="weekly-cadence"><div class="weekly-metric-label">Cadence journalière</div><div class="kv weekly-cadence-value">${x.applicable?weeklyRate(x):'—'}<span class="ku">${a.unit}/j</span></div></div><div class="ksb">${x.applicable?'Moyenne journalière sur la semaine'+(x.rate!==null&&!x.complete?' · provisoire':''):'Non applicable à ce périmètre'}</div>${x.applicable?`<div class="weekly-kpi-detail">Corrections : ${weeklyQuantity(x,'corrections')} ${a.unit}<br>Bilan net : ${weeklyQuantity(x,'net')} ${a.unit}<br>Dont dimanche : ${weeklyQuantity(x,'sunday')} ${a.unit}<br>Jours renseignés pour toutes les localités : ${x.covered.length}/${m.expected.length}</div>`:''}</div>`;}).join('')}</div>`;
   h+=`${embedded?'<details class="cd weekly-notes"><summary>Règles de calcul et lecture des cadences</summary>':'<div class="cd weekly-notes"><b>Lecture des cadences</b>'}<p>Production déclarée de la période, dimanche inclus, divisée par les jours de référence du lundi au samedi. Les arrêts et les jours sans rapport restent dans le dénominateur ; aucun jour férié n’est retranché automatiquement.</p><p>Cadences provisoires lorsque les données sont incomplètes · <b>—</b> Donnée insuffisante. Une absence de rapport ne signifie pas un arrêt. Un zéro signifie aucune nouvelle quantité déclarée pour cette activité.</p><p>Ouvrages : regards suivis dans l’application. Les finitions réalisées marquent l’achèvement ; la réception ultérieure n’ajoute pas un nouvel ouvrage. Les étapes intermédiaires restent visibles ci-dessous.</p>${embedded?'</details>':'</div>'}`;
   if(m.warnings.length)h+=`<div class="cd weekly-warnings"><b>Points à vérifier avant diffusion</b><ul>${m.warnings.map(w=>`<li>${escHtml(w)}</li>`).join('')}</ul></div>`;
   [...new Set(m.rows.map(r=>r.zone))].forEach(z=>{h+=`<div class="cd"><div class="ct">Zone ${escHtml(z)}</div>${weeklyTable(m.rows.filter(r=>r.zone===z))}</div>`;});
-  h+=`<details class="cd"><summary>Couverture des journées et étapes des ouvrages</summary>${m.rows.map(r=>`<div class="weekly-coverage"><b>${escHtml(r.name)}</b><p>${r.missing.length?'Sans rapport de production : '+r.missing.map(fD).join(', '):m.expected.length?'Rapports de production présents pour les journées attendues.':'Aucune journée attendue écoulée.'}</p>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>`<span>${a.label} : ${r.metrics[a.key].covered.filter(d=>m.expected.includes(d)).length}/${m.expected.length} jours renseignés</span>`).join(' · ')}${r.gcUpdates.length?`<ul>${r.gcUpdates.map(u=>`<li>${fD(u.date)} · ${escHtml(u.id)} : ${escHtml(stageLabel(u.stage))}${u.correction?' (correction)':''}</li>`).join('')}</ul>`:''}</div>`).join('')}</details>`;
+  h+=`<details class="cd"><summary>Couverture des journées et étapes des ouvrages</summary>${m.rows.map(r=>`<div class="weekly-coverage"><b>${escHtml(r.name)}</b><p>${r.missing.length?'Journées sans confirmation complète : '+r.missing.map(fD).join(', '):m.expected.length?'Journées attendues renseignées ou sans activité confirmée.':'Aucune journée attendue écoulée.'}</p>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>`<span>${a.label} : ${r.metrics[a.key].covered.filter(d=>m.expected.includes(d)).length}/${m.expected.length} jours renseignés</span>`).join(' · ')}${r.gcUpdates.length?`<ul>${r.gcUpdates.map(u=>`<li>${fD(u.date)} · ${escHtml(u.id)} : ${escHtml(stageLabel(u.stage))}${u.correction?' (correction)':''}</li>`).join('')}</ul>`:''}</div>`).join('')}</details>`;
   if(m.constraints.length)h+=`<div class="cd"><div class="ct">Contraintes et actions signalées dans la période</div>${m.constraints.map(c=>`<p><b>${fD(c.date)} · ${escHtml(c.localite==='tous'?'Chantier':LOC.find(l=>l.id===c.localite)?.nm||c.localite)}</b> — ${escHtml(c.observation||'Fait non précisé')}${c.action?'<br>Action : '+escHtml(c.action):''}</p>`).join('')}</div>`;
   h+=`<details class="cd no-print"><summary>Synthèse à partager</summary><pre class="wa-txt" id="wa_weekly">${escHtml(weeklyText(m))}</pre><button class="bp" onclick="copyWA('weekly')">Copier la synthèse hebdomadaire</button></details></div>`;
   return h;
@@ -2345,6 +2404,7 @@ function pgDailyRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let c
     <div class="report-production-strip">${roadOpeningSummary(cu).known?`<span><b>Ouverture de voie</b>${fmtArea(roadOpeningSummary(cu).area)} m² déclarés</span>`:''}<span><b>Implantation topo</b>${fmt(synth.topoLength)} ml · ${synth.rates.topographie.toFixed(1)}%</span><span><b>Bardage</b>${fmt(synth.totals.bar)} ml · ${synth.rates.bardage.toFixed(1)}%</span>${weldingVisible()?`<span><b>Soudure PEHD</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
     ${qualite.ecartPlafonnement>0.05?`<details class="report-quality no-print"><summary>Contrôle des données brutes</summary><div>La pose brute saisie est de ${fmt(qualite.remblaiBrut)} ml ; ${fmt(qualite.remblaiPlafonne)} ml sont retenus après plafonnement par zone et DN. Écart à analyser : ${fmt(qualite.ecartPlafonnement)} ml.</div></details>`:''}
     ${rp.kind==='correction'||negCount?`<div class="alert-box" style="border-color:#f5a623;background:#fffaf0"><div class="alert-header">🧾 Rapport de correction · ${negCount} mouvement${negCount>1?'s':''} négatif${negCount>1?'s':''}</div><div class="alert-body"><b>Motif :</b> ${escHtml(rp.correctionReason||'Correction historique — motif initial non documenté')}</div></div>`:''}
+    ${entryReportNotice(rp)}
     ${renderAlerts(alerts)}
     ${alerts.length&&!materialTracking()?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <label style="font-size:12px;color:#5a6778;display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -2476,6 +2536,8 @@ function whatsappText(date,rp,cu,zone=null){
   const zones=zone===null?ZN:[zone],s=whatsappSummary(cu,zone),locIds=new Set(s.locs.map(l=>l.id));
   let txt=`*📊 RAPPORT JOURNALIER D'AVANCEMENT*\n*Projet :* ${projectShortName()}\n*Date des travaux :* ${fD(date)}\n${zone===null?'Avancement physique global':'Avancement physique de la zone'} : *${s.index.toFixed(1)} %*\n`;
   if(zone!==null)txt+=`*Zone :* ${zone}\n`;
+  if(s.locs.some(l=>entryStatus(rp,l.id)==='pending'))txt+='Données partielles — compléments en attente.\n';
+  if(s.locs.some(l=>entryStatus(rp,l.id)==='legacy'))txt+='Rapport historique — complétude non confirmée.\n';
   if(rp.kind==='correction'||countNegativeMovements(rp))txt+=`*Nature :* CORRECTION DE DONNÉES — ${(rp.correctionReason||'motif historique non documenté').trim()}\n`;
   let section=1;
   const heading=title=>`\n━━━━━━━━━━━━━━━━━━\n*${section++}. ${title}*\n\n`;
@@ -2485,11 +2547,11 @@ function whatsappText(date,rp,cu,zone=null){
     txt+=`📍 *Zone ${z}*\n`;
     for(const l of locs){
       const rows=activities.filter(r=>r.localite===l.nm);
-      if(!rows.length)continue;
       if(locs.length>1||WA_MODE==='detail')txt+=`*${l.nm}*\n`;
-      txt+=rows.map(r=>`  ▸ ${r.type}: ${r.detail}`).join('\n')+'\n';
+      if(rows.length)txt+=rows.map(r=>`  ▸ ${r.type}: ${r.detail}`).join('\n')+'\n';
+      else txt+='  ▸ '+entryEmptyText(rp,l.id)+'\n';
+      if(rows.length&&entryStatus(rp,l.id)==='pending')txt+='  ▸ Données en attente — activité partiellement renseignée\n';
     }
-    if(!activities.length)txt+='  ▸ Pas d’activité ce jour\n';
     txt+='\n';
   }
   const constraints=constraintsForReport(date,rp).filter(c=>c.localite==='tous'||locIds.has(c.localite));
@@ -3192,6 +3254,7 @@ function pgDG(){
     </div>
     <div class="dashboard-context">Projet ${escHtml(projectName())} · <b>${fmt(tP)} ml prévus</b> · ${dernierRpt?'Données au '+fD(dernierRpt):'Aucune donnée'} · ${nRapports} rapports</div>`;
 
+  if(dernierRpt&&LOC.some(l=>entryStatus(db[dernierRpt],l.id)==='pending'))h+=entryReportNotice(db[dernierRpt]);
   // ── 1. Synthèse décisionnelle V1.5 ──
   h+=`<div class="decision-grid">
     <div class="decision-card decision-card--index">
@@ -3852,7 +3915,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.5.1 — Historique des versions et motifs de modification, 24/09/2026' ,
+      version_app:'2.6.0 — Historique des versions et motifs de modification, 24/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4535,7 +4598,7 @@ function reportQuantityWarnings(data){
       for(const [key,label] of [['bar','Bardage'],['f','Fouille'],['r','Pose'],['ess','Essai'],...((!materialTracking()||weldedZone(z))?[['s','Soudure']]:[])]){
         if(d[key]>planned+.01||d[key]<-.01)warnings.push(`${l.nm} / ${zoneCaption(z)} / DN ${dn} : ${label} cumulé ${fmt(d[key])} m, prévu ${fmt(+planned)} m.`);
       }
-      if(d.ess>d.r+.01)warnings.push(`${l.nm} / DN ${dn} : essais supérieurs au linéaire posé.`);
+      if(d.ess>d.r+.01)warnings.push(`${l.nm} / ${zoneCaption(z)} / DN ${dn} : essais supérieurs au linéaire posé.`);
     }
   }
   return warnings;
@@ -4830,6 +4893,7 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .history-notice{border-left:4px solid #f5a623;background:#fffaf0;padding:14px;font-size:12px;line-height:1.5}
 .history-secured{color:#23835d;font-size:12px}.history-error{color:#b42318}.report-revision-reason{border-left:4px solid #2c7be5}
 @media(max-width:700px){.history-controls label,.history-controls .fi{width:100%}}
+.entry-status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.entry-status-item{display:flex;flex-direction:column;gap:7px;font-size:12px}.entry-status-panel{border-left:4px solid #2c7be5}.entry-report-notice{border-left:4px solid #f5a623;background:#fffaf0;font-size:12px}.entry-report-notice p{margin:4px 0}
 </style>
 </body>
 </html>
