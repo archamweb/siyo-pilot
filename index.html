@@ -1313,9 +1313,9 @@ function refreshUserContext(){const m=MEMBERSHIPS.find(x=>x.project_id===ACTIVE_
 let DG_ACT_PIVOT='r'; // Activité affichée dans le tableau pivot mensuel par localité: s/f/r/ess
 let DG_LOC_DETAIL=null; // Localité ouverte en détail (drill-down), null = fermé
 let DG_SHOW_LOT_DETAILS=false; // Colonnes techniques du tableau par lot
-const DG_ACTIVITY_LABELS={s:'Soudure',f:'Fouille',r:'Pose',ess:'Essai',road:'Ouverture de voie'};
-const DG_ACTIVITY_TITLES={s:'Soudure',f:'Fouille',r:'Pose de conduite',ess:'Essai de pression',road:'Ouverture de voie'};
-const DG_ACTIVITY_COLORS={s:'#2c7be5',f:'#f5a623',r:'#36b37e',ess:'#e74c3c',road:'#64748b'};
+const DG_ACTIVITY_LABELS={s:'Soudure',f:'Fouille',r:'Pose',ess:'Essais',gc:'Ouvrages GC'};
+const DG_ACTIVITY_TITLES={s:'Soudure',f:'Fouille',r:'Pose de conduite',ess:'Essais de pression',gc:'Ouvrages GC'};
+const DG_ACTIVITY_COLORS={s:'#2c7be5',f:'#f5a623',r:'#36b37e',ess:'#e74c3c',gc:'#7e6bfa'};
 function setSaisieSection(section){
   SAISIE_SECTION=section;
   document.querySelectorAll('[data-saisie-section]').forEach(el=>el.classList.toggle('is-active',el.dataset.saisieSection===section));
@@ -1506,9 +1506,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.9</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.10</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.9</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.10</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2192,20 +2192,20 @@ function weeklyText(model){
 }
 function weeklyState(){return WEEKLY_SELECTIONS[ACTIVE_PROJECT_ID]||(WEEKLY_SELECTIONS[ACTIVE_PROJECT_ID]={date:weeklyDefault(),zone:null});}
 function setReportView(value){REPORT_VIEW=value==='weekly'?'weekly':'daily';draw();}
-function setWeeklyDate(value){if(weeklyValidDate(value)&&value<=today()){weeklyState().date=weeklyMonday(value);draw();}}
-function stepWeekly(n){const next=weeklyShift(weeklyState().date,n*7);if(next<=today()){weeklyState().date=next;draw();}}
-function setWeeklyZone(value){const index=Number(value);weeklyState().zone=value===''?null:(Number.isInteger(index)&&ZN[index]!==undefined?ZN[index]:null);draw();}
+function setWeeklyDate(value){if(weeklyValidDate(value)&&value<=today()){weeklyState().date=weeklyMonday(value);refreshWeeklyView();}}
+function stepWeekly(n){const next=weeklyShift(weeklyState().date,n*7);if(next<=today()){weeklyState().date=next;refreshWeeklyView();}}
+function setWeeklyZone(value){const index=Number(value);weeklyState().zone=value===''?null:(Number.isInteger(index)&&ZN[index]!==undefined?ZN[index]:null);refreshWeeklyView();}
 function reportViewTabs(){return`<div class="mn report-view-tabs no-print"><div class="wa-mode-switch"><button class="${REPORT_VIEW==='daily'?'is-active':''}" onclick="setReportView('daily')">Rapport journalier</button><button class="${REPORT_VIEW==='weekly'?'is-active':''}" onclick="setReportView('weekly')">Performance hebdomadaire</button></div></div>`;}
 function weeklyTable(rows){
   return`<div class="weekly-table-wrap"><table class="tb weekly-table"><thead><tr><th>Localité / activité</th><th class="nr">Production</th><th class="nr">Corrections / ajustements</th><th class="nr">Bilan net</th><th class="nr">Cadence</th><th class="nr">Dont dimanche</th></tr></thead><tbody>${rows.map(r=>`<tr class="weekly-locality"><th colspan="6">${escHtml(r.name)}${r.regards?`<span>${r.gcInProgress} ouvrages en cours · ${r.gcCompleted}/${r.regards} terminés, dont ${r.gcReceived} réceptionnés</span>`:''}</th></tr>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>{const x=r.metrics[a.key];return`<tr><td>${a.label}</td><td class="nr">${weeklyQuantity(x,'production')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'corrections')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'net')} ${a.unit}</td><td class="nr">${weeklyRate(x)} ${a.unit}/j</td><td class="nr">${weeklyQuantity(x,'sunday')} ${a.unit}</td></tr>`;}).join('')}`).join('')}</tbody></table></div>`;
 }
-function pgWeekly(){
+function pgWeekly(embedded=false){
   const state=weeklyState();if(state.zone!==null&&!ZN.includes(state.zone))state.zone=null;
   const m=weeklyModel(state.date,today(),state.zone);
-  let h=`<div class="mn"><div class="st">Performance hebdomadaire</div><div class="cd weekly-controls no-print"><div><label class="fl" for="weekly_date">Une date dans la semaine</label><input class="fi" type="date" id="weekly_date" value="${m.monday}" max="${today()}" onchange="setWeeklyDate(this.value)"></div><div><label class="fl" for="weekly_zone">Périmètre</label><select class="fi" id="weekly_zone" onchange="setWeeklyZone(this.value)"><option value="">Projet complet</option>${ZN.map((z,i)=>`<option value="${i}" ${m.zone===z?'selected':''}>Zone ${escHtml(z)}</option>`).join('')}</select></div><button class="bs" onclick="stepWeekly(-1)">← Précédente</button><button class="bs" onclick="stepWeekly(1)" ${weeklyShift(m.monday,7)>today()?'disabled':''}>Suivante →</button><button class="bs" onclick="setWeeklyDate(weeklyDefault())">Dernière semaine close</button></div>`;
+  let h=`<div class="${embedded?'weekly-embedded':'mn'}"><div class="st">Performance hebdomadaire</div><div class="cd weekly-controls no-print"><div><label class="fl" for="weekly_date">Une date dans la semaine</label><input class="fi" type="date" id="weekly_date" value="${m.monday}" max="${today()}" onchange="setWeeklyDate(this.value)"></div><div><label class="fl" for="weekly_zone">Périmètre</label><select class="fi" id="weekly_zone" onchange="setWeeklyZone(this.value)"><option value="">Projet complet</option>${ZN.map((z,i)=>`<option value="${i}" ${m.zone===z?'selected':''}>Zone ${escHtml(z)}</option>`).join('')}</select></div><button class="bs" onclick="stepWeekly(-1)">← Précédente</button><button class="bs" onclick="stepWeekly(1)" ${weeklyShift(m.monday,7)>today()?'disabled':''}>Suivante →</button><button class="bs" onclick="setWeeklyDate(weeklyDefault())">Dernière semaine close</button></div>`;
   h+=`<div class="cd weekly-period"><b>Du ${fD(m.monday)} au ${fD(m.sunday)} · ${m.zone===null?'Projet complet':'Zone '+escHtml(m.zone)}</b><span class="kb ${m.complete?'bg':'bo'}">${m.complete?'Saisies complètes':'Données incomplètes · provisoire'}</span><p>${m.ongoing?'Situation arrêtée au '+fD(m.to)+' · ':''}${m.start?m.expected.length+' jours de référence écoulés (lundi–samedi)':'Date de début à renseigner pour calculer les cadences'} · ${m.reported.length}/${m.expected.length} rapports de production couvrant toutes les localités.</p>${m.physicalAfter!==null?`<p>Avancement physique : <b>${weeklyFormat(m.physicalBefore)} % → ${weeklyFormat(m.physicalAfter)} %</b> · Variation incluant les corrections.</p>`:''}</div>`;
   h+=`<div class="weekly-kpis">${WEEKLY_ACTIVITIES.map(a=>{const x=m.totals[a.key];return`<div class="kc"><div class="kl">${a.label}</div><div class="kv">${x.applicable?weeklyQuantity(x,'production'):'—'}<span class="ku">${a.unit}</span></div><div class="ksb">${x.applicable?`Production déclarée · ${weeklyRate(x)} ${a.unit}/j`:'Non applicable à ce périmètre'}</div>${x.applicable?`<div class="weekly-kpi-detail">Corrections : ${weeklyQuantity(x,'corrections')} ${a.unit}<br>Bilan net : ${weeklyQuantity(x,'net')} ${a.unit}<br>Dont dimanche : ${weeklyQuantity(x,'sunday')} ${a.unit}<br>Jours renseignés pour toutes les localités : ${x.covered.length}/${m.expected.length}</div>`:''}</div>`;}).join('')}</div>`;
-  h+=`<div class="cd weekly-notes"><b>Lecture des cadences</b><p>Production déclarée de la période, dimanche inclus, divisée par les jours de référence du lundi au samedi. Les arrêts et les jours sans rapport restent dans le dénominateur ; aucun jour férié n’est retranché automatiquement.</p><p><b>*</b> Cadence provisoire · <b>—</b> Donnée insuffisante. Une absence de rapport ne signifie pas un arrêt. Un zéro signifie aucune nouvelle quantité déclarée pour cette activité.</p><p>Ouvrages : regards suivis dans l’application. Les finitions réalisées marquent l’achèvement ; la réception ultérieure n’ajoute pas un nouvel ouvrage. Les étapes intermédiaires restent visibles ci-dessous.</p></div>`;
+  h+=`${embedded?'<details class="cd weekly-notes"><summary>Règles de calcul et lecture des cadences</summary>':'<div class="cd weekly-notes"><b>Lecture des cadences</b>'}<p>Production déclarée de la période, dimanche inclus, divisée par les jours de référence du lundi au samedi. Les arrêts et les jours sans rapport restent dans le dénominateur ; aucun jour férié n’est retranché automatiquement.</p><p><b>*</b> Cadence provisoire · <b>—</b> Donnée insuffisante. Une absence de rapport ne signifie pas un arrêt. Un zéro signifie aucune nouvelle quantité déclarée pour cette activité.</p><p>Ouvrages : regards suivis dans l’application. Les finitions réalisées marquent l’achèvement ; la réception ultérieure n’ajoute pas un nouvel ouvrage. Les étapes intermédiaires restent visibles ci-dessous.</p>${embedded?'</details>':'</div>'}`;
   if(m.warnings.length)h+=`<div class="cd weekly-warnings"><b>Points à vérifier avant diffusion</b><ul>${m.warnings.map(w=>`<li>${escHtml(w)}</li>`).join('')}</ul></div>`;
   [...new Set(m.rows.map(r=>r.zone))].forEach(z=>{h+=`<div class="cd"><div class="ct">Zone ${escHtml(z)}</div>${weeklyTable(m.rows.filter(r=>r.zone===z))}</div>`;});
   h+=`<details class="cd"><summary>Couverture des journées et étapes des ouvrages</summary>${m.rows.map(r=>`<div class="weekly-coverage"><b>${escHtml(r.name)}</b><p>${r.missing.length?'Sans rapport de production : '+r.missing.map(fD).join(', '):m.expected.length?'Rapports de production présents pour les journées attendues.':'Aucune journée attendue écoulée.'}</p>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>`<span>${a.label} : ${r.metrics[a.key].covered.filter(d=>m.expected.includes(d)).length}/${m.expected.length} jours renseignés</span>`).join(' · ')}${r.gcUpdates.length?`<ul>${r.gcUpdates.map(u=>`<li>${fD(u.date)} · ${escHtml(u.id)} : ${escHtml(stageLabel(u.stage))}${u.correction?' (correction)':''}</li>`).join('')}</ul>`:''}</div>`).join('')}</details>`;
@@ -2878,6 +2878,8 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
 // Le tableau mensuel est indépendant de la courbe de trajectoire. Changer de
 // métier ne reconstruit donc plus le tableau de bord ni le graphique.
 function renderMonthlyPivot(cu,mKeys){
+  if(!Object.hasOwn(DG_ACTIVITY_LABELS,DG_ACT_PIVOT))DG_ACT_PIVOT='r';
+  if(DG_ACT_PIVOT==='gc')return renderMonthlyWorks(mKeys);
   const areaMode=DG_ACT_PIVOT==='road',displayValue=v=>areaMode?fmtArea(v):fmt(Math.round(v)),roadKnown={};
   if(!weldingVisible()&&DG_ACT_PIVOT==='s')DG_ACT_PIVOT='r';
   const actLabels=Object.fromEntries(Object.entries(DG_ACTIVITY_LABELS).filter(([k])=>k!=='s'||weldingVisible())),actColors=DG_ACTIVITY_COLORS;
@@ -2916,7 +2918,7 @@ function renderMonthlyPivot(cu,mKeys){
     ${LOC.map(l=>{
       if(areaMode)return `<th class="nr" style="font-size:9px">${escHtml(l.nm)}</th>`;
       const isActive=DG_LOC_DETAIL===l.id;
-      return `<th class="nr" style="font-size:9px;cursor:pointer;user-select:none;${isActive?'background:#e8f0fe;color:#2c7be5':''}" onclick="toggleDGLocality('${l.id}')" title="Cliquez pour voir le détail de ${l.nm}">${l.nm.slice(0,8)}${isActive?' ▼':''}</th>`;
+      return `<th class="nr" style="font-size:9px;cursor:pointer;user-select:none;${isActive?'background:#e8f0fe;color:#2c7be5':''}" onclick="toggleDGLocality('${l.id}')" title="Cliquez pour voir le détail de ${escHtml(l.nm)}">${escHtml(l.nm)}${isActive?' ▼':''}</th>`;
     }).join('')}
     <th class="nr">Total</th>
   </tr></thead><tbody>`;
@@ -2982,6 +2984,68 @@ function toggleDGLotDetails(){
     button.setAttribute('aria-pressed',DG_SHOW_LOT_DETAILS?'true':'false');
   }
 }
+
+// Le tableau de bord rassemble les périodes dans un seul bloc, sans recréer
+// la courbe d'avancement lors d'un changement de période ou de semaine.
+const DG_PERIODS={};
+function dashboardPeriod(){return DG_PERIODS[ACTIVE_PROJECT_ID]||'month';}
+function dashboardPerformanceContent(cu,mKeys){return dashboardPeriod()==='week'?pgWeekly(true):`<div class="cd" id="dg-monthly-pivot">${renderMonthlyPivot(cu,mKeys)}</div>`;}
+function dashboardPeriodButtons(){return`<div class="wa-mode-switch" role="group" aria-label="Période des performances"><button aria-pressed="${dashboardPeriod()==='month'}" class="${dashboardPeriod()==='month'?'is-active':''}" onclick="setDGPeriod('month')">Mois</button><button aria-pressed="${dashboardPeriod()==='week'}" class="${dashboardPeriod()==='week'?'is-active':''}" onclick="setDGPeriod('week')">Semaine</button></div>`;}
+function renderDashboardPerformance(cu,mKeys){return`<section id="dg-performance"><div class="performance-heading"><div class="st">Évolution de la production</div><div id="dg-period-buttons">${dashboardPeriodButtons()}</div></div><div id="dg-performance-content">${dashboardPerformanceContent(cu,mKeys)}</div></section>`;}
+function refreshDashboardPerformance(){
+  const host=document.getElementById('dg-performance-content');if(!host)return false;
+  let cu=cumul('9999-12-31');if(safeMode)cu=safeCumul(cu);
+  host.innerHTML=dashboardPerformanceContent(cu,Object.keys(groupByMonth()).sort());
+  const buttons=document.getElementById('dg-period-buttons');if(buttons)buttons.innerHTML=dashboardPeriodButtons();
+  return true;
+}
+function setDGPeriod(value){DG_PERIODS[ACTIVE_PROJECT_ID]=value==='week'?'week':'month';if(!refreshDashboardPerformance())draw();}
+function refreshWeeklyView(){if((V==='home'||V==='dg')&&dashboardPeriod()==='week'&&refreshDashboardPerformance())return;draw();}
+
+function monthlyWorksData(mKeys,cutoff=today()){
+  const months=Object.fromEntries(mKeys.map(m=>[m,Object.fromEntries(LOC.map(l=>[l.id,{production:0,adjustments:0,known:false}]))]));
+  const seen=Object.fromEntries(LOC.map(l=>[l.id,new Set()]));
+  let previous=cumul('0000-00-00');
+  dbDates().filter(d=>d<=cutoff).sort().forEach(d=>{
+    const report=db[d],after=cumul(d),month=months[d.slice(0,7)];
+    LOC.forEach(l=>{
+      if(!l.regards)return;
+      const cell=month?.[l.id],entry=report?.loc?.[l.id];
+      if(cell&&entry&&(report.finitions?.regards||weeklyNumber(entry.gc)))cell.known=true;
+      Object.entries(after[l.id]?.regardStages||{}).forEach(([id,stage])=>{
+        const old=previous[l.id]?.regardStages?.[id]||'non_demarre';
+        const delta=Number(stageProgress(stage)>=1)-Number(stageProgress(old)>=1);
+        const update=report?.finitions?.regards?.[l.id]?.[id];
+        const explicit=typeof update==='string'?update:update?.stage;
+        if(cell&&delta){
+          cell.known=true;
+          if(report.kind==='correction'||delta<0||!GC_STAGES[explicit]||seen[l.id].has(id))cell.adjustments+=delta;
+          else cell.production+=delta;
+        }
+        if(stageProgress(stage)>=1)seen[l.id].add(id);
+      });
+    });
+    previous=after;
+  });
+  return{months,end:previous};
+}
+function renderMonthlyWorks(mKeys){
+  const data=monthlyWorksData(mKeys),applicable=LOC.filter(l=>l.regards>0),sum=(m,key)=>applicable.reduce((n,l)=>n+(data.months[m]?.[l.id]?.[key]||0),0);
+  let h=`<div class="monthly-works-heading"><div><div class="ct">Réalisation mensuelle — Ouvrages GC (u)</div><p>Regards nouvellement terminés dans le mois. Les corrections et reprises historiques sont présentées séparément.</p></div>${monthlyActivityButtons()}</div>`;
+  if(!applicable.length)return h+'<p>Aucun ouvrage GC prévu dans le paramétrage de ce projet.</p>';
+  h+=`<div style="overflow-x:auto"><table class="tb"><thead><tr><th>Mois</th>${applicable.map(l=>`<th class="nr">${escHtml(l.nm)}</th>`).join('')}<th class="nr">Total</th></tr></thead><tbody>`;
+  mKeys.filter(m=>m<=today().slice(0,7)).forEach(m=>{
+    const hasData=applicable.some(l=>data.months[m][l.id].known);
+    h+=`<tr><th>${moisNm(m)}</th>${applicable.map(l=>`<td class="nr">${data.months[m][l.id].known?weeklyFormat(data.months[m][l.id].production):'—'}</td>`).join('')}<td class="nr"><b>${hasData?weeklyFormat(sum(m,'production')):'—'}</b></td></tr>`;
+    if(applicable.some(l=>data.months[m][l.id].adjustments))h+=`<tr class="monthly-gc-adjustments"><td>Corrections / reprises</td>${applicable.map(l=>`<td class="nr">${weeklyFormat(data.months[m][l.id].adjustments)}</td>`).join('')}<td class="nr">${weeklyFormat(sum(m,'adjustments'))}</td></tr>`;
+  });
+  const totalFor=(l,key)=>mKeys.reduce((n,m)=>n+data.months[m][l.id][key],0),knownFor=l=>mKeys.some(m=>data.months[m][l.id].known);
+  h+=`<tr class="monthly-gc-total"><th>TOTAL NOUVELLEMENT TERMINÉS</th>${applicable.map(l=>`<td class="nr">${knownFor(l)?weeklyFormat(totalFor(l,'production')):'—'}</td>`).join('')}<td class="nr">${applicable.some(knownFor)?weeklyFormat(mKeys.reduce((n,m)=>n+sum(m,'production'),0)):'—'}</td></tr></tbody></table></div>`;
+  h+=`<div class="monthly-gc-state">${applicable.map(l=>{const stages=Object.values(data.end[l.id]?.regardStages||{}),ongoing=stages.filter(s=>stageProgress(s)>0&&stageProgress(s)<1).length,done=stages.filter(s=>stageProgress(s)>=1).length,received=stages.filter(s=>s==='receptionne').length;return`<div><b>${escHtml(l.nm)}</b><span>${knownFor(l)?`${ongoing} en cours · ${done}/${l.regards} terminés, dont ${received} réceptionnés`:'États des ouvrages non renseignés'}</span></div>`;}).join('')}</div><p class="monthly-gc-note">Un regard est terminé au stade « Dalle et finitions réalisées ». Sa réception ultérieure ne compte pas un deuxième ouvrage. — : non renseigné ; 0 : aucun nouvel achèvement déclaré. Les cumuls tiennent compte des ajustements.</p>`;
+  return h;
+}
+function monthlyActivityButtons(){return`<div class="monthly-activity-buttons" role="group" aria-label="Métier affiché">${Object.keys(DG_ACTIVITY_LABELS).filter(k=>k!=='s'||weldingVisible()).map(k=>`<button class="bs" aria-pressed="${DG_ACT_PIVOT===k}" style="${DG_ACT_PIVOT===k?`background:${DG_ACTIVITY_COLORS[k]};color:white;border-color:${DG_ACTIVITY_COLORS[k]}`:''}" onclick="setDGActivity('${k}')">${DG_ACTIVITY_LABELS[k]}</button>`).join('')}</div>`;}
+
 
 function pgDG(){
   let cu=cumul('9999-12-31');
@@ -3218,8 +3282,7 @@ function pgDG(){
   const plannedAtLatest=dernierRpt?plannedGlobalAtDate(dernierRpt):null;
   const physicalAtLatest=synth.index;
   const physicalGap=plannedAtLatest===null?null:physicalAtLatest-plannedAtLatest;
-  h+=`<div class="st">Évolution mensuelle</div>
-  <div class="cd" id="dg-monthly-pivot">${renderMonthlyPivot(cu,mKeys)}</div>
+  h+=`${renderDashboardPerformance(cu,mKeys)}
   <div class="cd">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <div class="ct" style="margin:0"><span class="dt" style="background:#36b37e"></span> Trajectoire d’avancement physique global</div>
@@ -3686,7 +3749,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.9 — Performance hebdomadaire : pose, essais et ouvrages, 24/09/2026' ,
+      version_app:'2.4.10 — Tableau de bord : périodes mois/semaine et ouvrages GC, 24/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4629,6 +4692,18 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .weekly-warnings{border-left:4px solid #f5a623}.weekly-warnings ul{padding-left:20px;margin-bottom:0}
 .weekly-coverage{padding:12px 0;border-bottom:1px solid #edf0f4}
 @media(max-width:700px){.weekly-kpis{grid-template-columns:1fr}.weekly-controls>div{width:100%}.weekly-controls .fi{width:100%}.report-view-tabs .wa-mode-switch{flex-wrap:wrap}.weekly-period{align-items:flex-start}}
+
+
+.performance-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 12px}
+.performance-heading .st{margin:0}.weekly-embedded{padding:0;margin:0}
+.weekly-embedded>.st{font-size:14px;margin:10px 0}
+.monthly-works-heading{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.monthly-works-heading .ct{margin-bottom:4px}.monthly-works-heading p,.monthly-gc-note{font-size:11px;color:#64748b;line-height:1.5}
+.monthly-activity-buttons{display:flex;gap:4px;flex-wrap:wrap;align-items:flex-start}
+.monthly-activity-buttons .bs{font-size:11px;padding:5px 12px}
+.monthly-gc-adjustments{color:#b45309;background:#fffaf0;font-size:11px}.monthly-gc-total{background:#f0f4f8;border-top:2px solid #dce1e9;font-weight:700}
+.monthly-gc-state{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;font-size:12px}
+.monthly-gc-state span{display:block;color:#64748b;margin-top:4px}
 
 </style>
 </body>
