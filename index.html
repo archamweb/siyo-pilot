@@ -749,7 +749,7 @@ function calcBlocage(a){
 // Les anciens aléas restent conservés comme historique. Les nouveaux faits sont
 // saisis dans chaque rapport afin de constituer une chronologie contemporaine.
 const CONTRAINTE_ACTIVITES={
-  implantation:'Implantation topo',bardage:'Bardage',assemblage:'Assemblage / soudure',
+  implantation:'Implantation topo',ouverture_voie:'Ouverture de voie',bardage:'Bardage',assemblage:'Assemblage / soudure',
   fouille:'Fouille',pose:'Pose de conduite',essais:'Essais de pression',
   gc:'Ouvrages GC',raccordements:'Piquages / raccordements',
   rincage:'Rinçage-désinfection',recolement:'Plans de récolement',autre:'Autre activité'
@@ -1040,6 +1040,10 @@ function renderMobilisationEntry(report){
 }
 // Une même liste d'activités alimente le rapport et WhatsApp.
 // Les anciens champs imp/bar sont des cumuls : seul leur mouvement est présenté.
+const fmtArea=n=>n.toLocaleString('fr-FR',{maximumFractionDigits:2});
+function roadOpeningSummary(cu,locs=LOC){
+  return locs.reduce((out,l)=>{const c=cu[l.id];if(c?.roadAreaKnown){out.known=true;out.area+=c.roadArea||0;}return out;},{known:false,area:0});
+}
 function reportDailyActivities(report,locs,date=SD){
   const previousDay=new Date(date+'T00:00:00Z');previousDay.setUTCDate(previousDay.getUTCDate()-1);
   const before=cumul(previousDay.toISOString().slice(0,10)),rows=[];
@@ -1048,6 +1052,7 @@ function reportDailyActivities(report,locs,date=SD){
     const entry=report?.loc?.[l.id]||{};
     const topo=entry.topoDay!==undefined?(+entry.topoDay||0):entry.imp!==undefined?Math.max(0,(+entry.imp||0)*l.tot-(before[l.id]?.topoMl||0)):0;
     if(topo)add(l,'Implantation topo',fmt(topo)+' ml');
+    if(entry.roadAreaDay)add(l,'Ouverture de voie',fmtArea(entry.roadAreaDay)+' m²');
     const daily=dayDN(report,l.id);
     for(const z of l.zones)for(const dn of Object.keys(z.dn)){
       const d=entry.zones?.[z.zid]?.[dn]||{},key=pipeDailyKey(z,dn);
@@ -1079,6 +1084,7 @@ function countNegativeMovements(report){
   let count=0;
   Object.values(report.loc).forEach(loc=>{
     if(typeof loc?.topoDay==='number'&&loc.topoDay<0)count++;
+    if(typeof loc?.roadAreaDay==='number'&&loc.roadAreaDay<0)count++;
     Object.values(loc.zones||{}).forEach(zone=>{
       Object.values(zone||{}).forEach(dn=>{
         ['s','f','r','ess','bar','barDay'].forEach(k=>{if(typeof dn?.[k]==='number'&&dn[k]<0)count++;});
@@ -1129,7 +1135,7 @@ function cumul(upTo){
   LOC.forEach(l=>{
     const regardStages={};
     for(let i=0;i<(l.regards||0);i++)regardStages[regardId(l,i)]='non_demarre';
-    c[l.id]={t:0,s:0,f:0,r:0,imp:0,topoMl:0,gc:0,gcProgress:0,rec:0,
+    c[l.id]={t:0,s:0,f:0,r:0,imp:0,topoMl:0,roadArea:0,roadAreaKnown:false,gc:0,gcProgress:0,rec:0,
       regardStages,rincageStatus:migratedRinse.has(l.id)?'valide':'non_demarre',recolementStatus:'non_demarre',zones:{}};
     l.zones.forEach(zn=>{
       c[l.id].zones[zn.zid]={s:0,f:0,r:0,dn:{}};
@@ -1156,6 +1162,7 @@ function cumul(upTo){
   // champs cumulatifs imp/bar restent lus pour assurer la compatibilité avec la V1.
   dates.forEach(dt=>{const rp=db[dt];if(!rp?.loc)return;
     LOC.forEach(l=>{const el=rp.loc[l.id];if(!el)return;c[l.id].t+=(+el.t||0);
+      if(typeof el.roadAreaDay==='number'&&Number.isFinite(el.roadAreaDay)){c[l.id].roadArea+=el.roadAreaDay;c[l.id].roadAreaKnown=true;}
       if(el.topoDay!==undefined){c[l.id].topoMl+=(+el.topoDay||0);c[l.id].imp=l.tot>0?Math.min(1,Math.max(0,c[l.id].topoMl/l.tot)):0;}
       else if(el.imp!==undefined){c[l.id].imp=Math.max(c[l.id].imp,+el.imp||0);c[l.id].topoMl=Math.max(c[l.id].topoMl,c[l.id].imp*l.tot);}
       if(el.gc!==undefined)c[l.id].gc=Math.max(c[l.id].gc,+el.gc||0);
@@ -1306,9 +1313,9 @@ function refreshUserContext(){const m=MEMBERSHIPS.find(x=>x.project_id===ACTIVE_
 let DG_ACT_PIVOT='r'; // Activité affichée dans le tableau pivot mensuel par localité: s/f/r/ess
 let DG_LOC_DETAIL=null; // Localité ouverte en détail (drill-down), null = fermé
 let DG_SHOW_LOT_DETAILS=false; // Colonnes techniques du tableau par lot
-const DG_ACTIVITY_LABELS={s:'Soudure',f:'Fouille',r:'Pose',ess:'Essai'};
-const DG_ACTIVITY_TITLES={s:'Soudure',f:'Fouille',r:'Pose de conduite',ess:'Essai de pression'};
-const DG_ACTIVITY_COLORS={s:'#2c7be5',f:'#f5a623',r:'#36b37e',ess:'#e74c3c'};
+const DG_ACTIVITY_LABELS={s:'Soudure',f:'Fouille',r:'Pose',ess:'Essai',road:'Ouverture de voie'};
+const DG_ACTIVITY_TITLES={s:'Soudure',f:'Fouille',r:'Pose de conduite',ess:'Essai de pression',road:'Ouverture de voie'};
+const DG_ACTIVITY_COLORS={s:'#2c7be5',f:'#f5a623',r:'#36b37e',ess:'#e74c3c',road:'#64748b'};
 function setSaisieSection(section){
   SAISIE_SECTION=section;
   document.querySelectorAll('[data-saisie-section]').forEach(el=>el.classList.toggle('is-active',el.dataset.saisieSection===section));
@@ -1499,9 +1506,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.7</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.8</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.7</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.8</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -1673,7 +1680,7 @@ function pgParametrageProjet(){
 }
 function pgSaisiePreparation(ex,cuBefore,reportKind){
   const legacy=!!PROJECT_CONFIG.migration?.legacyPreparationFrozen;
-  let h=`<div class="saisie-panel-intro"><div><b>Préparation terrain du jour</b><span>Renseignez des mètres exécutés ce jour, jamais un pourcentage cumulé.</span></div></div>
+  let h=`<div class="saisie-panel-intro"><div><b>Préparation terrain du jour</b><span>Renseignez les quantités exécutées ce jour : implantation et bardage en ml, ouverture de voie en m². Jamais un cumul.</span></div></div>
     ${legacy?`<div class="saisie-note saisie-legacy-note">Les historiques d’implantation et de bardage de ${escHtml(projectShortName())} restent repris au ${fD(ETAT_INITIAL_DATE)}. Les champs ci-dessous servent uniquement aux travaux nouveaux ou aux corrections postérieures.</div>`:''}`;
   ZN.forEach(zone=>{
     const locs=LOC.filter(l=>l.z===zone);
@@ -1681,6 +1688,7 @@ function pgSaisiePreparation(ex,cuBefore,reportKind){
     locs.forEach(loc=>{
       const exL=ex?.loc?.[loc.id]||{},cuL=cuBefore?.[loc.id]||{};
       h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>Implantation topo du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay||''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
+      h+=`<div class="road-opening-entry"><label for="road_${loc.id}">Ouverture de voie du jour (m²)<input type="number" class="ci movement-input" id="road_${loc.id}" value="${typeof exL.roadAreaDay==='number'&&Number.isFinite(exL.roadAreaDay)?exL.roadAreaDay:''}" ${reportKind==='production'?'min="0"':''} step=".01" inputmode="decimal" placeholder="Non renseigné"></label><div><b>Cumul avant rapport : ${cuL.roadAreaKnown?fmtArea(cuL.roadArea)+' m²':'non renseigné'}</b><small>Surface réellement ouverte pour ce front, calculée selon la largeur retenue sur le projet. À saisir une seule fois, tous DN confondus. Distincte de la fouille de tranchée ; hors indice physique.</small></div></div>`;
       loc.zones.forEach(zn=>{
         const exZ=exL.zones?.[zn.zid]||{};
         h+=`<div class="prep-zone"><div class="zn-label"><span class="zn-tag">${escHtml(zn.nm||'Tronçon unique')}</span><span class="zn-tot">Bardage du jour par DN</span></div><table class="tb prep-table"><thead><tr><th>DN</th><th class="nr">Prévu</th><th class="nr">Cumul avant rapport</th><th class="nr">Bardage du jour</th></tr></thead><tbody>`;
@@ -1822,7 +1830,7 @@ function pgSaisie(){
       <span style="font-size:10px;color:#8a95a5;font-style:italic">Références contractuelles gérées dans Paramétrage</span>
     </div><div id="correction_fields" style="display:${reportKind==='correction'?'block':'none'};margin-top:12px;padding-top:12px;border-top:1px solid #eef1f6"><label class="fl">Motif obligatoire de la correction</label><textarea class="fi" id="correction_reason" rows="2" placeholder="Ex. Correction du cumul après contrôle contradictoire terrain">${escHtml(correctionReason)}</textarea><div style="font-size:10px;color:#8a95a5;margin-top:5px">Les quantités négatives ne sont autorisées que dans ce mode. Elles corrigent le cumul et ne représentent pas une production négative.</div></div></div>
     <div class="saisie-section-switch no-print" role="tablist">
-      <button type="button" data-saisie-section="preparation" class="${SAISIE_SECTION==='preparation'?'is-active':''}" onclick="setSaisieSection('preparation')">Implantation & bardage</button>
+      <button type="button" data-saisie-section="preparation" class="${SAISIE_SECTION==='preparation'?'is-active':''}" onclick="setSaisieSection('preparation')">Préparation terrain</button>
       <button type="button" data-saisie-section="network" class="${SAISIE_SECTION==='network'?'is-active':''}" onclick="setSaisieSection('network')">Production réseau</button>
       <button type="button" data-saisie-section="finishing" class="${SAISIE_SECTION==='finishing'?'is-active':''}" onclick="setSaisieSection('finishing')">Finitions, GC & réception</button>
       <button type="button" data-saisie-section="resources" class="${SAISIE_SECTION==='resources'?'is-active':''}" onclick="setSaisieSection('resources')">Ressources & contraintes</button>
@@ -1946,6 +1954,8 @@ function collect(){const d={loc:{},eff:{},logistique:{},finitions:{regards:{},gc
     const topoRaw=document.getElementById('topo_'+l.id)?.value??'';
     d.loc[l.id]={zones,p:cleanText(document.getElementById('p_'+l.id)?.value||'',500)};
     if(topoRaw!=='')d.loc[l.id].topoDay=+topoRaw||0;
+    const roadRaw=document.getElementById('road_'+l.id)?.value??'';
+    if(roadRaw!=='')d.loc[l.id].roadAreaDay=Number(roadRaw);
     if(previous.imp!==undefined&&previous.topoDay===undefined&&topoRaw==='')d.loc[l.id].imp=previous.imp;
     if(previous.gc!==undefined)d.loc[l.id].gc=previous.gc;
     if(previous.rec!==undefined)d.loc[l.id].rec=previous.rec;
@@ -2061,7 +2071,7 @@ function pgRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cum
       <div class="kc"><div class="kl">Ouvrages GC</div><div class="kv">${synth.gcProgressTotal>0?synth.rates.gc.toFixed(1)+'%':'Non renseigné'}</div><div class="ksb">${synth.gcDone} / ${synth.gcTotal} regards réceptionnés</div></div>
       <div class="kc"><div class="kl">Mise en service & documents</div><div class="report-dual-kpi"><span>Rinçage <b>${synth.rates.rincage.toFixed(1)}%</b></span><span>Récolement <b>${synth.rates.recolement.toFixed(1)}%</b></span></div></div>
     </div>
-    <div class="report-production-strip"><span><b>Implantation topo</b>${fmt(synth.topoLength)} ml · ${synth.rates.topographie.toFixed(1)}%</span><span><b>Bardage</b>${fmt(synth.totals.bar)} ml · ${synth.rates.bardage.toFixed(1)}%</span>${weldingVisible()?`<span><b>Soudure PEHD</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
+    <div class="report-production-strip">${roadOpeningSummary(cu).known?`<span><b>Ouverture de voie</b>${fmtArea(roadOpeningSummary(cu).area)} m² déclarés</span>`:''}<span><b>Implantation topo</b>${fmt(synth.topoLength)} ml · ${synth.rates.topographie.toFixed(1)}%</span><span><b>Bardage</b>${fmt(synth.totals.bar)} ml · ${synth.rates.bardage.toFixed(1)}%</span>${weldingVisible()?`<span><b>Soudure PEHD</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
     ${qualite.ecartPlafonnement>0.05?`<details class="report-quality no-print"><summary>Contrôle des données brutes</summary><div>La pose brute saisie est de ${fmt(qualite.remblaiBrut)} ml ; ${fmt(qualite.remblaiPlafonne)} ml sont retenus après plafonnement par zone et DN. Écart à analyser : ${fmt(qualite.ecartPlafonnement)} ml.</div></details>`:''}
     ${rp.kind==='correction'||negCount?`<div class="alert-box" style="border-color:#f5a623;background:#fffaf0"><div class="alert-header">🧾 Rapport de correction · ${negCount} mouvement${negCount>1?'s':''} négatif${negCount>1?'s':''}</div><div class="alert-body"><b>Motif :</b> ${escHtml(rp.correctionReason||'Correction historique — motif initial non documenté')}</div></div>`:''}
     ${renderAlerts(alerts)}
@@ -2168,6 +2178,8 @@ function whatsappSummary(cu,zone=null){
 }
 function whatsappCumulativeLines(s,cu){
   const lines=[],add=text=>lines.push('  ▸ '+text);
+  const road=roadOpeningSummary(cu,s.locs);
+  if(road.known)add(`Ouverture de voie: ${fmtArea(road.area)} m²`);
   add(`Implantation topo: ${fmt(s.topoLength)} / ${fmt(s.planned)} ml (${s.topoRate.toFixed(1)}%)`);
   add(`Bardage: ${fmt(s.barLength)} / ${fmt(s.planned)} ml (${s.barRate.toFixed(1)}%)`);
   if(weldingVisible(s.locs))add(`Soudure PEHD: ${fmt(s.totals.soud)} ml (${s.rates.soud.toFixed(1)}%)`);
@@ -2191,7 +2203,7 @@ function whatsappCumulativeLines(s,cu){
 }
 function whatsappText(date,rp,cu,zone=null){
   const zones=zone===null?ZN:[zone],s=whatsappSummary(cu,zone),locIds=new Set(s.locs.map(l=>l.id));
-  let txt=`*📊 RAPPORT JOURNALIER D'AVANCEMENT*\n*Projet :* ${projectShortName()}\n*Date des travaux :* ${fD(date)}\n`;
+  let txt=`*📊 RAPPORT JOURNALIER D'AVANCEMENT*\n*Projet :* ${projectShortName()}\n*Date des travaux :* ${fD(date)}\n${zone===null?'Avancement physique global':'Avancement physique de la zone'} : *${s.index.toFixed(1)} %*\n`;
   if(zone!==null)txt+=`*Zone :* ${zone}\n`;
   if(rp.kind==='correction'||countNegativeMovements(rp))txt+=`*Nature :* CORRECTION DE DONNÉES — ${(rp.correctionReason||'motif historique non documenté').trim()}\n`;
   let section=1;
@@ -2227,7 +2239,6 @@ function whatsappText(date,rp,cu,zone=null){
   }
   txt+=heading(zone===null?'RÉCAPITULATIF GLOBAL DU PROJET':'RÉCAPITULATIF DE LA ZONE');
   txt+=`*Situation cumulée au ${fD(date)}*\n`;
-  txt+=`  ▸ ${zone===null?'Avancement physique global du projet':'Avancement physique de la zone'}: *${s.index.toFixed(1)} %*\n`;
   txt+=whatsappCumulativeLines(s,cu).join('\n')+'\n';
 
   // Conserver les catégories de ressources existantes, regroupées par zone.
@@ -2699,6 +2710,7 @@ function renderLocDetail(cu,mKeys,actLabels,actColors){
 // Le tableau mensuel est indépendant de la courbe de trajectoire. Changer de
 // métier ne reconstruit donc plus le tableau de bord ni le graphique.
 function renderMonthlyPivot(cu,mKeys){
+  const areaMode=DG_ACT_PIVOT==='road',displayValue=v=>areaMode?fmtArea(v):fmt(Math.round(v)),roadKnown={};
   if(!weldingVisible()&&DG_ACT_PIVOT==='s')DG_ACT_PIVOT='r';
   const actLabels=Object.fromEntries(Object.entries(DG_ACTIVITY_LABELS).filter(([k])=>k!=='s'||weldingVisible())),actColors=DG_ACTIVITY_COLORS;
   const prodParMoisLoc={};
@@ -2708,6 +2720,7 @@ function renderMonthlyPivot(cu,mKeys){
     const rp=db[d];if(!rp?.loc)return;
     LOC.forEach(l=>{
       if(!prodParMoisLoc[l.id][m])prodParMoisLoc[l.id][m]=0;
+      if(areaMode){const area=rp.loc[l.id]?.roadAreaDay;if(typeof area==='number'&&Number.isFinite(area)){prodParMoisLoc[l.id][m]+=area;roadKnown[l.id]??={};roadKnown[l.id][m]=true;}return;}
       l.zones.forEach(zn=>{
         const ez=rp.loc[l.id]?.zones?.[zn.zid];if(!ez)return;
         Object.keys(zn.dn).forEach(dn=>{
@@ -2718,9 +2731,9 @@ function renderMonthlyPivot(cu,mKeys){
   });
 
   let h=`<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-    <div><div class="ct" style="margin:0"><span class="dt" style="background:${actColors[DG_ACT_PIVOT]}"></span> Production mensuelle par localité — ${DG_ACTIVITY_TITLES[DG_ACT_PIVOT]} (ml)</div>
+    <div><div class="ct" style="margin:0"><span class="dt" style="background:${actColors[DG_ACT_PIVOT]}"></span> Production mensuelle par localité — ${DG_ACTIVITY_TITLES[DG_ACT_PIVOT]} (${areaMode?'m²':'ml'})</div>
       <div style="font-size:10px;color:#8a95a5;margin:4px 0 0 15px">Valeurs nettes enregistrées dans les rapports, corrections comprises.</div></div>
-    <div style="display:flex;gap:4px" role="group" aria-label="Métier affiché">
+    <div style="display:flex;gap:4px;flex-wrap:wrap" role="group" aria-label="Métier affiché">
       ${Object.keys(actLabels).map(k=>{
         const isActive=DG_ACT_PIVOT===k;
         const activeColor=actColors[k];
@@ -2733,6 +2746,7 @@ function renderMonthlyPivot(cu,mKeys){
   <div style="overflow-x:auto"><table class="tb"><thead><tr>
     <th>Mois</th>
     ${LOC.map(l=>{
+      if(areaMode)return `<th class="nr" style="font-size:9px">${escHtml(l.nm)}</th>`;
       const isActive=DG_LOC_DETAIL===l.id;
       return `<th class="nr" style="font-size:9px;cursor:pointer;user-select:none;${isActive?'background:#e8f0fe;color:#2c7be5':''}" onclick="toggleDGLocality('${l.id}')" title="Cliquez pour voir le détail de ${l.nm}">${l.nm.slice(0,8)}${isActive?' ▼':''}</th>`;
     }).join('')}
@@ -2745,27 +2759,28 @@ function renderMonthlyPivot(cu,mKeys){
     h+=`<tr><td style="font-weight:600">${moisNm(m)}</td>`;
     LOC.forEach(l=>{
       const v=prodParMoisLoc[l.id][m]||0;
-      const hasValue=Math.abs(v)>0.001;
+      const hasValue=areaMode?!!roadKnown[l.id]?.[m]:Math.abs(v)>0.001;
       totParLoc[l.id]+=v;totMois+=v;
-      h+=`<td class="nr" style="${hasValue?'color:'+(v<0?'#e74c3c':actColors[DG_ACT_PIVOT])+';font-weight:500':'color:#b8c2cc'}">${hasValue?fmt(Math.round(v)):'—'}</td>`;
+      h+=`<td class="nr" style="${hasValue?'color:'+(v<0?'#e74c3c':actColors[DG_ACT_PIVOT])+';font-weight:500':'color:#b8c2cc'}">${hasValue?displayValue(v):'—'}</td>`;
     });
-    const hasMonthValue=Math.abs(totMois)>0.001;
-    h+=`<td class="nr" style="font-weight:600;color:${totMois<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${hasMonthValue?fmt(Math.round(totMois)):'—'}</td></tr>`;
+    const hasMonthValue=areaMode?LOC.some(l=>roadKnown[l.id]?.[m]):Math.abs(totMois)>0.001;
+    h+=`<td class="nr" style="font-weight:600;color:${totMois<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${hasMonthValue?displayValue(totMois):'—'}</td></tr>`;
     totGlobalPivot+=totMois;
   });
   h+=`<tr style="font-weight:700;border-top:2px solid #dce1e9;background:#f0f4f8"><td>TOTAL SAISI</td>`;
   LOC.forEach(l=>{
     const v=totParLoc[l.id];
+    if(areaMode){h+=`<td class="nr">${roadKnown[l.id]?fmtArea(v):'—'}</td>`;return;}
     const planned=materialTracking()&&DG_ACT_PIVOT==='s'?pehdLength([l]):l.tot;
     const pct=planned>0?(v/planned)*100:0;
     const over=pct>100.05;
-    h+=`<td class="nr" style="color:${v<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${Math.abs(v)>0.001?fmt(Math.round(v)):'—'}<div style="font-size:9px;color:${over?'#d97706':'#8a95a5'};font-weight:${over?600:400}" title="${over?'Dépassement de la référence prévue':''}">${pct>0?pct.toFixed(0)+'%'+(over?' ⚠':''):''}</div></td>`;
+    h+=`<td class="nr" style="color:${v<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${Math.abs(v)>0.001?displayValue(v):'—'}<div style="font-size:9px;color:${over?'#d97706':'#8a95a5'};font-weight:${over?600:400}" title="${over?'Dépassement de la référence prévue':''}">${pct>0?pct.toFixed(0)+'%'+(over?' ⚠':''):''}</div></td>`;
   });
-  h+=`<td class="nr" style="color:${totGlobalPivot<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${fmt(Math.round(totGlobalPivot))}</td></tr>`;
+  h+=`<td class="nr" style="color:${totGlobalPivot<0?'#e74c3c':actColors[DG_ACT_PIVOT]}">${areaMode&&!Object.keys(roadKnown).length?'—':displayValue(totGlobalPivot)}</td></tr>`;
   h+=`</tbody></table></div>
-    <div style="font-size:10px;color:#8a95a5;margin-top:6px;font-style:italic">Sélectionnez un métier pour actualiser uniquement ce tableau. Cliquez sur une localité pour le détail par DN. <span style="color:#d97706">⚠</span> signale un dépassement de la référence prévue.</div>
+    <div style="font-size:10px;color:#8a95a5;margin-top:6px;font-style:italic">${areaMode?'Surfaces déclarées par front, tous DN confondus. — : non renseigné ; 0 : valeur déclarée. Corrections comprises. Hors indice physique.':'Sélectionnez un métier pour actualiser uniquement ce tableau. Cliquez sur une localité pour le détail par DN. <span style="color:#d97706">⚠</span> signale un dépassement de la référence prévue.'}</div>
     <div id="loc-detail-anchor"></div>
-    ${renderLocDetail(cu,mKeys,actLabels,actColors)}`;
+    ${areaMode?'':renderLocDetail(cu,mKeys,actLabels,actColors)}`;
   return h;
 }
 
@@ -3503,7 +3518,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.7 — KPI financier sans montants, 15/09/2026' ,
+      version_app:'2.4.8 — Ouverture de voie en m² et en-tête WhatsApp, 24/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4165,6 +4180,8 @@ function changeReportDate(value){
 function reportValueError(data){
   if(data.mobilisation&&!validMobilisationRate(data.mobilisation.rate))return 'La mobilisation doit être comprise entre 0 et 100 %.';
   for(const l of LOC){
+    const area=data.loc?.[l.id]?.roadAreaDay;
+    if(area!==undefined&&(typeof area!=='number'||!Number.isFinite(area)))return 'Ouverture de voie : saisissez une surface valide en m².';
     const e=data.eff?.[l.id]||{};if(['f','s'].some(k=>!Number.isFinite(e[k])||e[k]<0||!Number.isInteger(e[k])))return 'Les effectifs doivent être des nombres entiers positifs ou nuls.';
   }
   for(const log of Object.values(data.logistique||{})){
@@ -4177,6 +4194,7 @@ function reportQuantityWarnings(data){
   const before=db;let cu;try{db={...db,[SD]:data};cu=cumul(SD);}finally{db=before;}
   const warnings=[];
   for(const l of LOC){
+    if(cu[l.id].roadArea<-.01)warnings.push(l.nm+' : cumul d’ouverture de voie négatif ('+fmtArea(cu[l.id].roadArea)+' m²).');
     if(cu[l.id].topoMl>l.tot+.01||cu[l.id].topoMl<-.01)warnings.push(l.nm+' : cumul topo hors du linéaire prévu.');
     for(const z of l.zones)for(const [dn,planned] of Object.entries(z.dn)){
       const d=cu[l.id].zones[z.zid].dn[dn];
@@ -4313,7 +4331,7 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:#f8f9fb;color:#2d3748
 
 /* Paramétrage projet */
 .param-page{max-width:1500px}.param-page-head,.param-actions,.param-status,.param-section-head,.param-loc-head,.param-zone-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.param-actions{flex-wrap:wrap}.param-status{margin:18px 0 12px;padding:14px 16px;border:1px solid #dbe5f0;border-left:4px solid #64748b;border-radius:10px;background:#fff}.param-status.draft{border-left-color:#f5a623;background:#fffaf2}.param-status>div{display:flex;flex-direction:column}.param-status b{font-size:12px;color:#0f1b2d}.param-status span,.param-status small{font-size:10px;color:#64748b}.param-status label{display:flex;align-items:center;gap:10px;min-width:420px}.param-status label span{white-space:nowrap}.param-status label input{min-width:280px}.param-errors{display:flex;flex-direction:column;gap:3px;margin-bottom:12px;padding:10px 14px;border:1px solid #fecaca;border-radius:9px;background:#fff1f2;color:#b91c1c}.param-errors b{font-size:11px}.param-errors span{font-size:9px;line-height:1.5}.param-tabs{display:flex;gap:6px;margin:0 0 14px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;overflow-x:auto}.param-tabs button{padding:9px 13px;border:0;border-radius:7px;background:transparent;color:#64748b;font:600 10px 'DM Sans';white-space:nowrap;cursor:pointer}.param-tabs button.active{background:#2c7be5;color:#fff;box-shadow:0 3px 9px rgba(44,123,229,.2)}.param-two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}.param-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.param-field{display:flex;flex-direction:column;gap:5px}.param-field>span,.param-loc-head span,.param-finance-ref>span{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#8491a5}.param-field>b{min-height:40px;padding:10px 12px;border:1px solid #e5eaf1;border-radius:7px;background:#f8fafc;font-size:11px;color:#17243a}.param-field small{font-size:8px;color:#8a95a5}.param-finance-ref{display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin-top:14px;padding:12px;border:1px solid #dbeafe;border-radius:9px;background:#f8fbff}.param-finance-ref b{font-size:11px}.param-finance-ref small{font-size:9px;color:#64748b}.param-finance-ref .bt{margin-top:4px}.param-section-head>div:first-child{display:flex;flex-direction:column}.param-section-head>div>span{font-size:10px;color:#64748b}.param-total{display:flex;flex-direction:column;align-items:flex-end}.param-total small{font-size:8px;text-transform:uppercase;color:#8491a5}.param-total b{font:700 18px 'JetBrains Mono';color:#2c7be5}.param-network-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px;margin-top:14px}.param-loc-list{display:flex;flex-direction:column;gap:5px}.param-loc-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:10px 11px;border:1px solid #e3e9f1;border-radius:8px;background:#fff;text-align:left;cursor:pointer}.param-loc-item span{display:flex;flex-direction:column}.param-loc-item b{font-size:11px;color:#152238}.param-loc-item small{font-size:8px;color:#8491a5}.param-loc-item strong{font:600 9px 'JetBrains Mono';color:#64748b}.param-loc-item.active{border-color:#2c7be5;background:#edf5ff;box-shadow:inset 3px 0 #2c7be5}.param-loc-detail{min-width:0;padding-left:14px;border-left:1px solid #e5eaf1}.param-loc-head{display:grid;grid-template-columns:1fr 1fr 160px;margin-bottom:10px;padding:11px;border-radius:9px;background:#f8fafc}.param-loc-head>div{display:flex;flex-direction:column;gap:4px}.param-loc-head b{font-size:12px}.param-zone-card{margin-bottom:9px;border:1px solid #e3e9f1;border-radius:9px;overflow:hidden}.param-zone-head{padding:8px 10px;background:#f8fafc}.param-zone-head b{font-size:10px}.param-zone-head span{margin-left:auto;font:600 9px 'JetBrains Mono';color:#64748b}.param-zone-head .bt{padding:5px 9px}.param-dn-grid{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;padding:10px}.param-dn-grid label{display:flex;align-items:center;gap:5px;padding:7px;border:1px solid #eef1f5;border-radius:7px}.param-dn-grid label b{margin-left:auto;font:600 10px 'JetBrains Mono'}.param-dn-grid input{width:90px;padding:6px;border:1px solid #ccd6e3;border-radius:5px;text-align:right;font:500 10px 'JetBrains Mono'}.param-dn-grid label button{width:22px;height:22px;border:0;border-radius:4px;background:#fee2e2;color:#b91c1c;cursor:pointer}.dn-tag{padding:3px 5px;border-left:3px solid #64748b;border-radius:3px;background:#f8fafc;font:600 8px 'JetBrains Mono';white-space:nowrap}.param-regard-list,.param-weight-list,.param-readonly-list{display:flex;flex-direction:column;gap:6px}.param-regard-list label,.param-weight-list label,.param-readonly-list>div{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #edf0f4;border-radius:7px;background:#fafbfc}.param-regard-list span,.param-weight-list span,.param-readonly-list b{font-size:10px}.param-regard-list b,.param-weight-list b,.param-readonly-list span{font:600 9px 'JetBrains Mono';color:#64748b}.param-regard-list input,.param-weight-list input{width:95px;padding:6px;border:1px solid #ccd6e3;border-radius:5px;text-align:right;font:500 10px 'JetBrains Mono'}.param-empty{padding:30px;text-align:center;color:#8491a5;font-size:10px}
-.param-add-front{width:100%;padding:10px;border:1px dashed #2c7be5;border-radius:8px;background:#f7fbff;color:#2c7be5;font:700 10px 'DM Sans';cursor:pointer}.param-add-front:hover{background:#eaf4ff}.param-structure-actions{grid-column:1/-1;display:flex!important;flex-direction:row!important;justify-content:flex-end;gap:7px;padding-top:8px;border-top:1px solid #e5eaf1}.param-danger,.param-zone-delete{border:1px solid #fecaca;border-radius:6px;background:#fff1f2;color:#b91c1c;font:700 9px 'DM Sans';cursor:pointer}.param-danger{padding:6px 9px}.param-zone-delete{width:28px;height:27px;font-size:14px}.param-danger:disabled,.param-zone-delete:disabled{border-color:#e5e7eb;background:#f3f4f6;color:#9ca3af;cursor:not-allowed}.param-zone-name{min-width:180px;padding:6px 8px;border:1px solid #ccd6e3;border-radius:6px;background:#fff;font:600 10px 'DM Sans';color:#17243a}.saisie-legacy-note{margin:0 0 12px;border-left:4px solid #f5a623;background:#fffaf0}.prep-loc{margin-top:10px;padding:12px;border:1px solid #e6ebf2;border-radius:10px;background:#fff}.prep-loc-head{display:grid;grid-template-columns:minmax(180px,1fr) minmax(240px,360px) auto;align-items:end;gap:14px;margin-bottom:10px}.prep-loc-head>div{display:flex;flex-direction:column}.prep-loc-head b{font-size:12px;color:#0f1b2d}.prep-loc-head span,.prep-loc-head small{font-size:9px;color:#7d8999}.prep-loc-head label{display:flex;flex-direction:column;gap:4px}.prep-loc-head label input{width:100%}.prep-loc-head>small{padding-bottom:8px}.prep-zone{margin-top:8px;overflow-x:auto}.prep-table{min-width:620px;margin-top:3px}.prep-table td:nth-child(n+2),.prep-table th:nth-child(n+2){text-align:right}.prep-table input{margin-left:auto}
+.param-add-front{width:100%;padding:10px;border:1px dashed #2c7be5;border-radius:8px;background:#f7fbff;color:#2c7be5;font:700 10px 'DM Sans';cursor:pointer}.param-add-front:hover{background:#eaf4ff}.param-structure-actions{grid-column:1/-1;display:flex!important;flex-direction:row!important;justify-content:flex-end;gap:7px;padding-top:8px;border-top:1px solid #e5eaf1}.param-danger,.param-zone-delete{border:1px solid #fecaca;border-radius:6px;background:#fff1f2;color:#b91c1c;font:700 9px 'DM Sans';cursor:pointer}.param-danger{padding:6px 9px}.param-zone-delete{width:28px;height:27px;font-size:14px}.param-danger:disabled,.param-zone-delete:disabled{border-color:#e5e7eb;background:#f3f4f6;color:#9ca3af;cursor:not-allowed}.param-zone-name{min-width:180px;padding:6px 8px;border:1px solid #ccd6e3;border-radius:6px;background:#fff;font:600 10px 'DM Sans';color:#17243a}.saisie-legacy-note{margin:0 0 12px;border-left:4px solid #f5a623;background:#fffaf0}.prep-loc{margin-top:10px;padding:12px;border:1px solid #e6ebf2;border-radius:10px;background:#fff}.prep-loc-head{display:grid;grid-template-columns:minmax(180px,1fr) minmax(240px,360px) auto;align-items:end;gap:14px;margin-bottom:10px}.prep-loc-head>div{display:flex;flex-direction:column}.prep-loc-head b{font-size:12px;color:#0f1b2d}.prep-loc-head span,.prep-loc-head small{font-size:9px;color:#7d8999}.prep-loc-head label{display:flex;flex-direction:column;gap:4px}.prep-loc-head label input{width:100%}.prep-loc-head>small{padding-bottom:8px}.road-opening-entry{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px;margin-bottom:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px}.road-opening-entry label{display:flex;flex:1 1 220px;max-width:360px;flex-direction:column;gap:5px;font-size:11px;font-weight:600}.road-opening-entry label input{width:100%}.road-opening-entry>div{flex:2 1 230px;font-size:10px;color:#64748b}.road-opening-entry small{display:block;margin-top:4px;line-height:1.5}.prep-zone{margin-top:8px;overflow-x:auto}.prep-table{min-width:620px;margin-top:3px}.prep-table td:nth-child(n+2),.prep-table th:nth-child(n+2){text-align:right}.prep-table input{margin-left:auto}
 
 .material-selector{display:flex;align-items:center;gap:8px;font-size:12px}.material-selector .fi{width:155px;min-width:110px;margin:0;font-size:12px;padding:6px}.material-tag{font-size:12px;font-weight:600;color:#173657}.pvc-production .weld-cell{display:none!important}.param-zone-head{flex-wrap:wrap}
 /* Print */
