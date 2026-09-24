@@ -1506,9 +1506,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.10</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.11</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.10</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.4.11</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2049,7 +2049,6 @@ function renderReportConstraints(date,rp){
 }
 
 // Performance hebdomadaire : lecture seule des rapports, aucun nouvel enregistrement.
-let REPORT_VIEW='daily';
 const WEEKLY_SELECTIONS={};
 const WEEKLY_ACTIVITIES=[{key:'pose',field:'r',label:'Pose de conduite',unit:'ml'},{key:'ess',field:'ess',label:'Essais conformes',unit:'ml'},{key:'gc',label:'Ouvrages terminés',unit:'u'}];
 function weeklyValidDate(s){return typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;}
@@ -2191,20 +2190,18 @@ function weeklyText(model){
   return lines.join('\n');
 }
 function weeklyState(){return WEEKLY_SELECTIONS[ACTIVE_PROJECT_ID]||(WEEKLY_SELECTIONS[ACTIVE_PROJECT_ID]={date:weeklyDefault(),zone:null});}
-function setReportView(value){REPORT_VIEW=value==='weekly'?'weekly':'daily';draw();}
 function setWeeklyDate(value){if(weeklyValidDate(value)&&value<=today()){weeklyState().date=weeklyMonday(value);refreshWeeklyView();}}
 function stepWeekly(n){const next=weeklyShift(weeklyState().date,n*7);if(next<=today()){weeklyState().date=next;refreshWeeklyView();}}
 function setWeeklyZone(value){const index=Number(value);weeklyState().zone=value===''?null:(Number.isInteger(index)&&ZN[index]!==undefined?ZN[index]:null);refreshWeeklyView();}
-function reportViewTabs(){return`<div class="mn report-view-tabs no-print"><div class="wa-mode-switch"><button class="${REPORT_VIEW==='daily'?'is-active':''}" onclick="setReportView('daily')">Rapport journalier</button><button class="${REPORT_VIEW==='weekly'?'is-active':''}" onclick="setReportView('weekly')">Performance hebdomadaire</button></div></div>`;}
 function weeklyTable(rows){
-  return`<div class="weekly-table-wrap"><table class="tb weekly-table"><thead><tr><th>Localité / activité</th><th class="nr">Production</th><th class="nr">Corrections / ajustements</th><th class="nr">Bilan net</th><th class="nr">Cadence</th><th class="nr">Dont dimanche</th></tr></thead><tbody>${rows.map(r=>`<tr class="weekly-locality"><th colspan="6">${escHtml(r.name)}${r.regards?`<span>${r.gcInProgress} ouvrages en cours · ${r.gcCompleted}/${r.regards} terminés, dont ${r.gcReceived} réceptionnés</span>`:''}</th></tr>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>{const x=r.metrics[a.key];return`<tr><td>${a.label}</td><td class="nr">${weeklyQuantity(x,'production')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'corrections')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'net')} ${a.unit}</td><td class="nr">${weeklyRate(x)} ${a.unit}/j</td><td class="nr">${weeklyQuantity(x,'sunday')} ${a.unit}</td></tr>`;}).join('')}`).join('')}</tbody></table></div>`;
+  return`<div class="weekly-table-wrap"><table class="tb weekly-table"><thead><tr><th>Localité / activité</th><th class="nr weekly-cadence-cell">Cadence journalière</th><th class="nr">Production</th><th class="nr">Corrections / ajustements</th><th class="nr">Bilan net</th><th class="nr">Dont dimanche</th></tr></thead><tbody>${rows.map(r=>`<tr class="weekly-locality"><th colspan="6">${escHtml(r.name)}${r.regards?`<span>${r.gcInProgress} ouvrages en cours · ${r.gcCompleted}/${r.regards} terminés, dont ${r.gcReceived} réceptionnés</span>`:''}</th></tr>${WEEKLY_ACTIVITIES.filter(a=>a.key!=='gc'||r.regards>0).map(a=>{const x=r.metrics[a.key];return`<tr><td>${a.label}</td><td class="nr weekly-cadence-cell">${weeklyRate(x)} ${a.unit}/j</td><td class="nr">${weeklyQuantity(x,'production')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'corrections')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'net')} ${a.unit}</td><td class="nr">${weeklyQuantity(x,'sunday')} ${a.unit}</td></tr>`;}).join('')}`).join('')}</tbody></table></div>`;
 }
 function pgWeekly(embedded=false){
   const state=weeklyState();if(state.zone!==null&&!ZN.includes(state.zone))state.zone=null;
   const m=weeklyModel(state.date,today(),state.zone);
   let h=`<div class="${embedded?'weekly-embedded':'mn'}"><div class="st">Performance hebdomadaire</div><div class="cd weekly-controls no-print"><div><label class="fl" for="weekly_date">Une date dans la semaine</label><input class="fi" type="date" id="weekly_date" value="${m.monday}" max="${today()}" onchange="setWeeklyDate(this.value)"></div><div><label class="fl" for="weekly_zone">Périmètre</label><select class="fi" id="weekly_zone" onchange="setWeeklyZone(this.value)"><option value="">Projet complet</option>${ZN.map((z,i)=>`<option value="${i}" ${m.zone===z?'selected':''}>Zone ${escHtml(z)}</option>`).join('')}</select></div><button class="bs" onclick="stepWeekly(-1)">← Précédente</button><button class="bs" onclick="stepWeekly(1)" ${weeklyShift(m.monday,7)>today()?'disabled':''}>Suivante →</button><button class="bs" onclick="setWeeklyDate(weeklyDefault())">Dernière semaine close</button></div>`;
   h+=`<div class="cd weekly-period"><b>Du ${fD(m.monday)} au ${fD(m.sunday)} · ${m.zone===null?'Projet complet':'Zone '+escHtml(m.zone)}</b><span class="kb ${m.complete?'bg':'bo'}">${m.complete?'Saisies complètes':'Données incomplètes · provisoire'}</span><p>${m.ongoing?'Situation arrêtée au '+fD(m.to)+' · ':''}${m.start?m.expected.length+' jours de référence écoulés (lundi–samedi)':'Date de début à renseigner pour calculer les cadences'} · ${m.reported.length}/${m.expected.length} rapports de production couvrant toutes les localités.</p>${m.physicalAfter!==null?`<p>Avancement physique : <b>${weeklyFormat(m.physicalBefore)} % → ${weeklyFormat(m.physicalAfter)} %</b> · Variation incluant les corrections.</p>`:''}</div>`;
-  h+=`<div class="weekly-kpis">${WEEKLY_ACTIVITIES.map(a=>{const x=m.totals[a.key];return`<div class="kc"><div class="kl">${a.label}</div><div class="kv">${x.applicable?weeklyQuantity(x,'production'):'—'}<span class="ku">${a.unit}</span></div><div class="ksb">${x.applicable?`Production déclarée · ${weeklyRate(x)} ${a.unit}/j`:'Non applicable à ce périmètre'}</div>${x.applicable?`<div class="weekly-kpi-detail">Corrections : ${weeklyQuantity(x,'corrections')} ${a.unit}<br>Bilan net : ${weeklyQuantity(x,'net')} ${a.unit}<br>Dont dimanche : ${weeklyQuantity(x,'sunday')} ${a.unit}<br>Jours renseignés pour toutes les localités : ${x.covered.length}/${m.expected.length}</div>`:''}</div>`;}).join('')}</div>`;
+  h+=`<div class="weekly-kpis">${WEEKLY_ACTIVITIES.map(a=>{const x=m.totals[a.key],label={pose:'Cadence de pose',ess:'Cadence des essais',gc:'Cadence des ouvrages'}[a.key];return`<div class="kc weekly-cadence-card" data-activity="${a.key}"><div class="kl">${label}</div><div class="kv weekly-cadence-value">${x.applicable?weeklyRate(x):'—'}<span class="ku">${a.unit}/j</span></div><div class="ksb">${x.applicable?'Moyenne journalière sur la semaine'+(x.rate!==null&&!x.complete?' · provisoire':''):'Non applicable à ce périmètre'}</div>${x.applicable?`<div class="weekly-production">Production de la période : <b>${weeklyQuantity(x,'production')} ${a.unit}</b></div><div class="weekly-kpi-detail">Corrections : ${weeklyQuantity(x,'corrections')} ${a.unit}<br>Bilan net : ${weeklyQuantity(x,'net')} ${a.unit}<br>Dont dimanche : ${weeklyQuantity(x,'sunday')} ${a.unit}<br>Jours renseignés pour toutes les localités : ${x.covered.length}/${m.expected.length}</div>`:''}</div>`;}).join('')}</div>`;
   h+=`${embedded?'<details class="cd weekly-notes"><summary>Règles de calcul et lecture des cadences</summary>':'<div class="cd weekly-notes"><b>Lecture des cadences</b>'}<p>Production déclarée de la période, dimanche inclus, divisée par les jours de référence du lundi au samedi. Les arrêts et les jours sans rapport restent dans le dénominateur ; aucun jour férié n’est retranché automatiquement.</p><p><b>*</b> Cadence provisoire · <b>—</b> Donnée insuffisante. Une absence de rapport ne signifie pas un arrêt. Un zéro signifie aucune nouvelle quantité déclarée pour cette activité.</p><p>Ouvrages : regards suivis dans l’application. Les finitions réalisées marquent l’achèvement ; la réception ultérieure n’ajoute pas un nouvel ouvrage. Les étapes intermédiaires restent visibles ci-dessous.</p>${embedded?'</details>':'</div>'}`;
   if(m.warnings.length)h+=`<div class="cd weekly-warnings"><b>Points à vérifier avant diffusion</b><ul>${m.warnings.map(w=>`<li>${escHtml(w)}</li>`).join('')}</ul></div>`;
   [...new Set(m.rows.map(r=>r.zone))].forEach(z=>{h+=`<div class="cd"><div class="ct">Zone ${escHtml(z)}</div>${weeklyTable(m.rows.filter(r=>r.zone===z))}</div>`;});
@@ -2214,7 +2211,7 @@ function pgWeekly(embedded=false){
   return h;
 }
 
-function pgRapport(){return reportViewTabs()+(REPORT_VIEW==='weekly'?pgWeekly():pgDailyRapport());}
+function pgRapport(){return pgDailyRapport();}
 
 // ── RAPPORT (détail DN, pas de graphiques) ──
 function pgDailyRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let cu=cumul(SD);
@@ -3197,7 +3194,7 @@ function pgDG(){
   const variationProductionPct=prod7Prec!==0?variationProduction/prod7Prec*100:null;
   const productionColor=variationProduction<0?'#e74c3c':variationProduction>0?'#36b37e':'#5a6778';
   const poseObserved=cadencePoseObservee();
-  const poseSourceLabel=pilotage.poseRateSource==='planning'?'planning de fin':pilotage.poseRateSource==='manual'?'saisie manuelle':poseObserved>0?'20 derniers jours productifs':'planning par défaut · données indisponibles';
+  const poseSourceLabel=pilotage.poseRateSource==='planning'?'planning de fin':pilotage.poseRateSource==='manual'?'saisie manuelle':poseObserved>0?'médiane · jusqu’à 20 jours avec pose':'planning par défaut · données indisponibles';
   const projectionColor=projection.date?(projection.deltaTarget>0?'#e74c3c':'#36b37e'):'#8a95a5';
 
   h+=`<div class="st">Pilotage & projection</div>`;
@@ -3215,16 +3212,16 @@ function pgDG(){
       ${frontCritique?`<span class="kb bbl">${partFront.toFixed(1)}% du reste global</span>`:''}
     </div>
     <div class="kc" style="border-left:4px solid ${productionColor}">
-      <div class="kl">Production récente</div>
+      <div class="kl">Volume net posé · 7 jours</div>
       <div class="kv" style="color:${productionColor}">${fmt(prod7)}<span class="ku">ml</span></div>
-      <div class="ksb">7 derniers jours calendaires · période précédente : ${fmt(prod7Prec)} ml</div>
+      <div class="ksb">${dernierRpt?`Du ${fD(weeklyShift(dernierRpt,-6))} au ${fD(dernierRpt)} · 7 jours glissants`:'Aucun rapport disponible'}<br>Volume retenu, corrections comprises · période précédente : ${fmt(prod7Prec)} ml</div>
       <span class="kb ${variationProduction<0?'br':variationProduction>0?'bg':'bo'}">${variationProduction>=0?'+':''}${fmt(variationProduction)} ml${variationProductionPct===null?'':` · ${variationProductionPct>=0?'+':''}${variationProductionPct.toFixed(1)}%`}</span>
     </div>
     <div class="kc" style="border-left:4px solid ${projectionColor}">
       <div class="kl">Fin de chantier calculée</div>
       <div class="kv" style="font-size:18px;color:${projectionColor}">${projection.date?fD(projection.date):'Non estimée'}</div>
       <div class="ksb">${projection.date?projection.totalDays+' jours calendaires après la reprise':'Date de reprise non définie'}</div>
-      <span class="kb ${projection.date?'bbl':'bo'}">Cadence pose : ${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}</span>
+      <span class="kb ${projection.date?'bbl':'bo'}">Cadence de projection : ${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}</span>
     </div>
   </div>`;
 
@@ -3749,7 +3746,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.4.10 — Tableau de bord : périodes mois/semaine et ouvrages GC, 24/09/2026' ,
+      version_app:'2.4.11 — Cadences hebdomadaires mises en avant, 24/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4676,7 +4673,6 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 }
 
 /* Rapport hebdomadaire : les styles existants sont conservés. */
-.report-view-tabs{padding-top:16px;padding-bottom:0;margin-bottom:0}
 .weekly-controls{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px}
 .weekly-controls .fi{width:auto;min-width:180px}
 .weekly-period{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -4691,7 +4687,7 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .weekly-notes,.weekly-warnings,.weekly-coverage{font-size:12px;line-height:1.6}
 .weekly-warnings{border-left:4px solid #f5a623}.weekly-warnings ul{padding-left:20px;margin-bottom:0}
 .weekly-coverage{padding:12px 0;border-bottom:1px solid #edf0f4}
-@media(max-width:700px){.weekly-kpis{grid-template-columns:1fr}.weekly-controls>div{width:100%}.weekly-controls .fi{width:100%}.report-view-tabs .wa-mode-switch{flex-wrap:wrap}.weekly-period{align-items:flex-start}}
+@media(max-width:700px){.weekly-kpis{grid-template-columns:1fr}.weekly-controls>div{width:100%}.weekly-controls .fi{width:100%}.weekly-period{align-items:flex-start}}
 
 
 .performance-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0 12px}
@@ -4704,6 +4700,15 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .monthly-gc-adjustments{color:#b45309;background:#fffaf0;font-size:11px}.monthly-gc-total{background:#f0f4f8;border-top:2px solid #dce1e9;font-weight:700}
 .monthly-gc-state{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;font-size:12px}
 .monthly-gc-state span{display:block;color:#64748b;margin-top:4px}
+
+
+.weekly-cadence-card .weekly-cadence-value{font-size:36px;font-weight:750;line-height:1.2;color:#2c7be5;margin:10px 0}
+.weekly-cadence-card:nth-child(2) .weekly-cadence-value{color:#21875f}
+.weekly-cadence-card:nth-child(3) .weekly-cadence-value{color:#7257d6}
+.weekly-cadence-value .ku{font-size:16px;font-weight:600;margin-left:6px;white-space:nowrap}
+.weekly-production{font-size:13px;color:#526175;margin-top:14px;line-height:1.5}
+.weekly-cadence-cell{font-weight:700;color:#1d5db5;background:#f3f7fd}
+@media(max-width:700px){.weekly-cadence-card .weekly-cadence-value{font-size:34px}}
 
 </style>
 </body>
