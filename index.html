@@ -1643,9 +1643,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.0</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.0</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -1954,19 +1954,17 @@ function renderReportFinishing(rp){
 const ENTRY_STATUS={pending:'À compléter',complete:'Renseigné',idle:'Pas d’activité',legacy:'Ancien rapport — état non confirmé'};
 function entryStatus(report,lid){const v=report?.entryStatus?.[lid];return ['pending','complete','idle'].includes(v)?v:'legacy';}
 function entryConfirmed(report,lid){return ['complete','idle'].includes(entryStatus(report,lid));}
-function renderEntryStatus(ex){return `<div class="cd entry-status-panel"><div class="ct">Point de saisie par tronçon / localité</div><p class="saisie-note">Choisissez « Renseigné » après vérification de toutes les activités : les champs de quantité laissés vides seront alors considérés à zéro. « À compléter » conserve les quantités disponibles sans confirmer les autres. « Pas d’activité » confirme une journée sans travaux déclarés.</p><div class="entry-status-grid">${LOC.map(l=>{const state=ex?entryStatus(ex,l.id):'pending';return `<label class="entry-status-item"><b>${escHtml(l.nm)}</b><select class="fi" id="entry_status_${l.id}">${Object.entries(ENTRY_STATUS).filter(([k])=>k!=='legacy'||state==='legacy').map(([k,v])=>`<option value="${k}" ${state===k?'selected':''}>${v}</option>`).join('')}</select></label>`;}).join('')}</div></div>`;}
+// Le CT saisit après consolidation de tous les tronçons (organisation retenue).
+// La confirmation finale porte sur le rapport complet, sans sélection par localité.
 function applyEntryStatus(data){
  data.entryStatus={};
  for(const l of LOC){
-  const value=document.getElementById('entry_status_'+l.id)?.value||'pending';
-  if(['pending','complete','idle'].includes(value))data.entryStatus[l.id]=value;
-  const confirmed=['complete','idle'].includes(value);
+  data.entryStatus[l.id]='complete';
   for(const z of l.zones)for(const dn of Object.keys(z.dn)){
    const cell=data.loc[l.id].zones[z.zid][dn];
    for(const key of ['s','f','r','ess']){
-    const el=document.getElementById(`${key}_${l.id}_${z.zid}_${dn}`);
-    if(!el){delete cell[key];continue;}
-    if(!confirmed&&el.value==='')delete cell[key];
+    // Ne pas réintroduire un poste inapplicable, notamment la soudure en PVC.
+    if(!document.getElementById(`${key}_${l.id}_${z.zid}_${dn}`))delete cell[key];
    }
   }
  }
@@ -1983,13 +1981,13 @@ function entryNotice(report,locs=LOC){
  const legacy=locs.filter(l=>entryStatus(report,l.id)==='legacy');
  return [pending.length?'Données en attente : '+pending.map(l=>l.nm).join(', ')+'. Les résultats restent partiels.':'',legacy.length?'Ancien rapport : complétude non confirmée pour '+legacy.map(l=>l.nm).join(', ')+'. Les zéros historiques ne confirment pas une absence d’activité.':''].filter(Boolean);
 }
-function entryEmptyText(report,lid){return {idle:'Pas d’activité ce jour',pending:'Données en attente',complete:'Aucune quantité de travaux déclarée ce jour',legacy:'Aucune activité renseignée — absence d’activité non confirmée'}[entryStatus(report,lid)];}
+function entryEmptyText(report,lid){return {idle:'Pas d’activité ce jour',pending:'Données en attente',complete:'Pas d’activité ce jour',legacy:'Aucune activité renseignée — absence d’activité non confirmée'}[entryStatus(report,lid)];}
 function entryReportNotice(report){const notes=entryNotice(report);return notes.length?`<div class="cd entry-report-notice">${notes.map(n=>`<p>${escHtml(n)}</p>`).join('')}</div>`:'';}
 function confirmReportReview(data,messages){
  const lines=[`RÉCAPITULATIF DU ${fD(SD)}`,''];
  for(const l of LOC){
-  const state=entryStatus(data,l.id),rows=reportDailyActivities(data,[l],SD);
-  lines.push(l.nm+' — '+ENTRY_STATUS[state]);
+  const rows=reportDailyActivities(data,[l],SD);
+  lines.push(l.nm);
   if(rows.length)lines.push(...rows.map(r=>'  • '+r.type+' : '+r.detail));
   else lines.push('  '+entryEmptyText(data,l.id));
   const eff=data.eff?.[l.id];if(eff&&(eff.f||eff.s))lines.push(`  Effectifs : ${eff.f||0} fouilleurs ; ${eff.s||0} poseurs / soudeurs`);
@@ -2000,7 +1998,7 @@ function confirmReportReview(data,messages){
  const reason=reportRevisionReason();if(reason)lines.push('Motif de modification : '+reason);
  lines.push('',...entryNotice(data));
  if(messages.length)lines.push('','POINTS À VÉRIFIER',...messages.map(m=>'• '+m));
- lines.push('','OK : confirmer ces informations et enregistrer.','Annuler : revenir à la saisie sans rien envoyer.');
+ lines.push('','OK : confirmer le rapport consolidé et enregistrer.','Annuler : revenir à la saisie sans rien envoyer.');
  return confirm(lines.join('\n'));
 }
 
@@ -2021,7 +2019,6 @@ function pgSaisie(){
       <span style="font-size:10px;color:#8a95a5;font-style:italic">Références contractuelles gérées dans Paramétrage</span>
     </div><div id="correction_fields" style="display:${reportKind==='correction'?'block':'none'};margin-top:12px;padding-top:12px;border-top:1px solid #eef1f6"><label class="fl">Motif obligatoire de la correction</label><textarea class="fi" id="correction_reason" rows="2" placeholder="Ex. Correction du cumul après contrôle contradictoire terrain">${escHtml(correctionReason)}</textarea><div style="font-size:10px;color:#8a95a5;margin-top:5px">Les quantités négatives ne sont autorisées que dans ce mode. Elles corrigent le cumul et ne représentent pas une production négative.</div></div></div>
     ${renderRevisionReason(ex)}
-    ${renderEntryStatus(ex)}
     ${renderFileEditor()}
     <div class="saisie-section-switch no-print" role="tablist">
       <button type="button" data-saisie-section="preparation" class="${SAISIE_SECTION==='preparation'?'is-active':''}" onclick="setSaisieSection('preparation')">Préparation terrain</button>
@@ -3939,7 +3936,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.7.0 — Historique des versions et motifs de modification, 24/09/2026' ,
+      version_app:'2.7.1 — Saisie consolidée par le conducteur de travaux, 29/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4635,7 +4632,7 @@ if(document.addEventListener){
 window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.7.0
+// Pièces jointes privées — SIYO Pilot 2.7.1
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4722,7 +4719,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.7.0');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.7.1');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -5022,7 +5019,7 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .history-notice{border-left:4px solid #f5a623;background:#fffaf0;padding:14px;font-size:12px;line-height:1.5}
 .history-secured{color:#23835d;font-size:12px}.history-error{color:#b42318}.report-revision-reason{border-left:4px solid #2c7be5}
 @media(max-width:700px){.history-controls label,.history-controls .fi{width:100%}}
-.entry-status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.entry-status-item{display:flex;flex-direction:column;gap:7px;font-size:12px}.entry-status-panel{border-left:4px solid #2c7be5}.entry-report-notice{border-left:4px solid #f5a623;background:#fffaf0;font-size:12px}.entry-report-notice p{margin:4px 0}
+.entry-report-notice{border-left:4px solid #f5a623;background:#fffaf0;font-size:12px}.entry-report-notice p{margin:4px 0}
 </style>
 </body>
 </html>
