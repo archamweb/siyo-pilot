@@ -683,9 +683,11 @@ let REPORT_HISTORY=null,HISTORY_REQUEST=0;
 const REPORT_PENDING_MEMORY=new Map();
 function canReadReportHistory(){return canWrite();}
 function reportRevisionReason(){return (document.getElementById('revision_reason')?.value||'').trim();}
-function renderRevisionReason(ex){return ex||DB_VERSIONS[SD]
+function recreationReasonForm(){return `<div class="cd report-revision-reason"><input type="hidden" id="report_recreation_required" value="1"><label class="fl" for="revision_reason">Motif de recréation — obligatoire</label><textarea class="fi" id="revision_reason" rows="2" minlength="8" maxlength="1000" placeholder="Expliquez pourquoi ce rapport supprimé doit être recréé"></textarea><div class="saisie-note">La suppression et les anciennes versions restent dans l’historique.</div></div>`;}
+function renderRevisionReason(ex){const content=ex||DB_VERSIONS[SD]
   ?`<div class="cd report-revision-reason"><label class="fl" for="revision_reason">Motif de modification — obligatoire</label><textarea class="fi" id="revision_reason" rows="2" minlength="8" maxlength="1000" placeholder="Ex. Quantité de pose corrigée après vérification du métré"></textarea><div class="saisie-note">L’ancienne version sera conservée. Décrivez ce qui change et pourquoi. Un nouveau motif est nécessaire à chaque modification.</div></div>`
-  :`<details class="cd"><summary>Commentaire de création (facultatif)</summary><textarea class="fi" id="revision_reason" rows="2" maxlength="1000" placeholder="Facultatif à la première saisie ; requis pour recréer un rapport supprimé."></textarea></details>`;}
+  :readReportDraft()?.fields?.report_recreation_required==='1'?recreationReasonForm():'';
+  return `<div id="report-reason-slot">${content}</div>`;}
 function stableReportJSON(value){if(Array.isArray(value))return '['+value.map(stableReportJSON).join(',')+']';if(value&&typeof value==='object')return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+stableReportJSON(value[k])).join(',')+'}';return JSON.stringify(value);}
 function pendingReportKey(date,pid=ACTIVE_PROJECT_ID){return 'siyo.report-request.v1.'+(SESSION?.user?.id||'anonymous')+'.'+pid+'.'+date;}
 function reportPendingRequest(date,data,expected,reason){
@@ -719,7 +721,13 @@ async function saveReportWithHistory(date,data){
     clearPendingReport(date,pid);await finishReportFiles(fileContext(date));return true;
   }catch(error){
     toast(historyErrorMessage(error)+' Votre brouillon est conservé.');
-    if(/motif|recréer|modification/i.test(error?.message||'')){const el=document.getElementById('revision_reason');const details=el?.closest('details');if(details)details.open=true;el?.focus();}
+    if(pid===ACTIVE_PROJECT_ID&&date===SD&&V==='saisie'){
+      if(/recréer un rapport supprimé/i.test(error?.message||'')&&!document.getElementById('revision_reason')){
+        const slot=document.getElementById('report-reason-slot');
+        if(slot){slot.innerHTML=recreationReasonForm();captureReportDraft();}
+      }
+      if(/motif|recréer|modification/i.test(error?.message||''))document.getElementById('revision_reason')?.focus();
+    }
     return false;
   }finally{fileBusy(false);syncing=false;document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=false);}
 }
@@ -1643,9 +1651,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.3</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.3</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -3639,12 +3647,12 @@ function pgDG(){
     h+=`<div class="cd" style="border-top:4px solid ${clr}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div style="font-size:16px;font-weight:700;color:#0f1b2d">Zone ${zone}</div>
-        <div style="text-align:right"><div style="font-size:28px;font-weight:700;color:${cP(zPosePct)}">${zPosePct.toFixed(1)}%</div><div style="font-size:9px;color:#8a95a5">Conduite posée retenue</div></div>
+        <div style="text-align:right"><div style="font-size:28px;font-weight:700;color:${cP(zPosePct)}">${zPosePct.toFixed(1)}%</div><div style="font-size:9px;color:#8a95a5">Avancement de la pose</div></div>
       </div>
       <div style="font-size:12px;color:#5a6778;margin-bottom:10px">${locs.length} localités · ${fmt(zP)} ml de référence</div>
       <div class="kr" style="margin-bottom:8px">
         ${weldingVisible(locs)?`<div class="kc"><div class="kl">Soudure PEHD retenue</div><div class="kv" style="font-size:16px">${fmt(zRet.soud)} ml</div>${bar(zRates.assemblage)}</div>`:''}
-        <div class="kc"><div class="kl">Fouille retenue</div><div class="kv" style="font-size:16px">${fmt(zRet.fou)} ml</div>${bar(zRates.ouverture)}</div>
+        <div class="kc"><div class="kl">Pose réalisée</div><div class="kv" style="font-size:16px">${fmt(zRet.pose)} ml</div>${bar(zPosePct)}</div>
         <div class="kc"><div class="kl">Essais conformes</div><div class="kv" style="font-size:16px">${fmt(zRet.ess)} ml</div>${bar(zRates.essais)}</div>
       </div>
       <div class="kr" style="margin-bottom:8px">
@@ -3936,7 +3944,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.7.1 — Saisie consolidée par le conducteur de travaux, 29/09/2026' ,
+      version_app:'2.7.3 — Saisie consolidée par le conducteur de travaux, 29/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4632,7 +4640,7 @@ if(document.addEventListener){
 window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.7.1
+// Pièces jointes privées — SIYO Pilot 2.7.3
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4719,7 +4727,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.7.1');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.7.3');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
