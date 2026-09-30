@@ -69,14 +69,15 @@ function materialSummary(locs,cu,base=PHYSICAL_WEIGHTS){
       totals.bar+=cap(d.bar,prev);totals.fou+=cap(d.f,prev);totals.rem+=cap(d.r,prev);totals.ess+=cap(d.ess,prev);
     }
   }
+  const civil=hasCivil(locs)?civilSummary(locs,cu):null,gcApplicable=gcTotal>0||!!civil;
   const pct=v=>tP?v/tP*100:0;
-  const rates={topographie:pct(topoLength),bardage:pct(totals.bar),assemblage:byMaterial.PEHD.planned?totals.soud/byMaterial.PEHD.planned*100:0,ouverture:pct(totals.fou),fermeture:pct(totals.rem),gc:gcTotal?gcProgressTotal/gcTotal*100:0,essais:pct(totals.ess),rincage:pct(rdLength),recolement:locs.length?recolementDone/locs.length*100:0};
+  const rates={topographie:pct(topoLength),bardage:pct(totals.bar),assemblage:byMaterial.PEHD.planned?totals.soud/byMaterial.PEHD.planned*100:0,ouverture:pct(totals.fou),fermeture:pct(totals.rem),gc:civil?civil.rate:(gcTotal?gcProgressTotal/gcTotal*100:0),essais:pct(totals.ess),rincage:pct(rdLength),recolement:locs.length?recolementDone/locs.length*100:0};
   const common=['topographie','bardage','ouverture','essais','rincage'];
   let points=common.reduce((s,k)=>s+(+base[k]||0)*rates[k]/100,0);
   if(tP)points+=((+base.assemblage||0)*byMaterial.PEHD.s+(+base.fermeture||0)*byMaterial.PEHD.r+((+base.assemblage||0)+(+base.fermeture||0))*byMaterial.PVC.r)/tP;
-  if(gcTotal)points+=(+base.gc||0)*rates.gc/100;
-  const applicableKeys=Object.keys(base).filter(k=>k!=='gc'||gcTotal>0),weight=applicableKeys.reduce((s,k)=>s+(+base[k]||0),0);
-  return{tP,totals,byMaterial,pehdPlanned:byMaterial.PEHD.planned,topoLength,gcDone,gcProgressTotal,gcTotal,rdLength,recolementDone,recolementLength,rates,index:weight?points/weight*100:0,applicableKeys:applicableKeys.filter(k=>k!=='assemblage'||byMaterial.PEHD.planned>0)};
+  if(gcApplicable)points+=(+base.gc||0)*rates.gc/100;
+  const applicableKeys=Object.keys(base).filter(k=>k!=='gc'||gcApplicable),weight=applicableKeys.reduce((s,k)=>s+(+base[k]||0),0);
+  return{civil,tP,totals,byMaterial,pehdPlanned:byMaterial.PEHD.planned,topoLength,gcDone,gcProgressTotal,gcTotal,rdLength,recolementDone,recolementLength,rates,index:weight?points/weight*100:0,applicableKeys:applicableKeys.filter(k=>k!=='assemblage'||byMaterial.PEHD.planned>0)};
 }
 function projectDraftMaterial(id,zoneIndex,value){
   if(!PARAM_DRAFT||!['PEHD','PVC'].includes(value))return;
@@ -124,11 +125,12 @@ function exportMaterialCumul(){
   }
   const summary=[['Indice physique — '+projectName()],['Poids PEHD conservés ; poids de soudure transféré à la pose PVC. Regards comptés une seule fois.'],[],['Périmètre','Prévu (ml)','Pose retenue (ml)','PEHD prévu (ml)','Soudure PEHD retenue (ml)','Regards prévus','Avancement GC','Indice physique']];
   const groups=[...LOC.map(l=>[l.nm,[l]]),...ZN.map(z=>['Zone '+z,LOC.filter(l=>l.z===z)]),['Projet',LOC]];
-  for(const [name,locs] of groups){const s=materialSummary(locs,cu);summary.push([name,s.tP,s.totals.rem,s.pehdPlanned,s.pehdPlanned?s.totals.soud:'N/A',s.gcTotal,s.gcTotal?s.rates.gc/100:'N/A',s.index/100]);}
+  for(const [name,locs] of groups){const s=materialSummary(locs,cu);summary.push([name,s.tP,s.totals.rem,s.pehdPlanned,s.pehdPlanned?s.totals.soud:'N/A',s.gcTotal,(s.gcTotal||s.civil)?s.rates.gc/100:'N/A',s.index/100]);}
   const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet(rows),ss=XLSX.utils.aoa_to_sheet(summary);
   ws['!cols']=rows[3].map((_,i)=>({wch:i<4?24:18}));ss['!cols']=summary[3].map((_,i)=>({wch:i===0?28:22}));
   for(let r=4;r<summary.length;r++)for(const c of [6,7]){const cell=ss[XLSX.utils.encode_cell({r,c})];if(cell?.t==='n')cell.z='0.00%';}
   XLSX.utils.book_append_sheet(wb,ws,'Cumuls par matériau');XLSX.utils.book_append_sheet(wb,ss,'Indice physique');
+  appendCivilExportSheet(wb,cu);
   XLSX.writeFile(wb,'Cumul_'+projectIdSlug(projectShortName())+'_'+today()+'.xlsx');
 }
 
@@ -1651,9 +1653,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.3</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.7.3</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2434,12 +2436,13 @@ function pgDailyRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let c
       <div class="kc" style="border-left:4px solid #2c7be5"><div class="kl">Avancement physique consolidé</div><div class="kv">${synth.index.toFixed(1)}<span class="ku">%</span></div><div class="ksb">Même référence que le tableau de bord</div></div>
       <div class="kc" style="border-left:4px solid #36b37e"><div class="kl">Conduite posée retenue</div><div class="kv">${fmt(synth.totals.rem)}<span class="ku">ml</span></div><div class="ksb">${synth.rates.fermeture.toFixed(1)}% · reste ${fmt(Math.max(0,tP-synth.totals.rem))} ml</div></div>
       <div class="kc"><div class="kl">Essais conformes</div><div class="kv">${fmt(synth.totals.ess)}<span class="ku">ml</span></div><div class="ksb">${synth.rates.essais.toFixed(1)}% du linéaire</div></div>
-      <div class="kc"><div class="kl">Ouvrages GC</div><div class="kv">${synth.gcProgressTotal>0?synth.rates.gc.toFixed(1)+'%':'Non renseigné'}</div><div class="ksb">${synth.gcDone} / ${synth.gcTotal} regards réceptionnés</div></div>
+      <div class="kc"><div class="kl">Ouvrages GC</div><div class="kv">${synth.civil||synth.gcProgressTotal>0?synth.rates.gc.toFixed(1)+'%':'Non renseigné'}</div><div class="ksb">${synth.civil?'Toutes les familles GC pondérées':`${synth.gcDone} / ${synth.gcTotal} regards réceptionnés`}</div></div>
       <div class="kc"><div class="kl">Mise en service & documents</div><div class="report-dual-kpi"><span>Rinçage <b>${synth.rates.rincage.toFixed(1)}%</b></span><span>Récolement <b>${synth.rates.recolement.toFixed(1)}%</b></span></div></div>
     </div>
     <div class="report-production-strip">${roadOpeningSummary(cu).known?`<span><b>Ouverture de voie</b>${fmtArea(roadOpeningSummary(cu).area)} m² déclarés</span>`:''}<span><b>Implantation topo</b>${fmt(synth.topoLength)} ml · ${synth.rates.topographie.toFixed(1)}%</span><span><b>Bardage</b>${fmt(synth.totals.bar)} ml · ${synth.rates.bardage.toFixed(1)}%</span>${weldingVisible()?`<span><b>Soudure PEHD</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
     ${qualite.ecartPlafonnement>0.05?`<details class="report-quality no-print"><summary>Contrôle des données brutes</summary><div>La pose brute saisie est de ${fmt(qualite.remblaiBrut)} ml ; ${fmt(qualite.remblaiPlafonne)} ml sont retenus après plafonnement par zone et DN. Écart à analyser : ${fmt(qualite.ecartPlafonnement)} ml.</div></details>`:''}
     ${rp.kind==='correction'||negCount?`<div class="alert-box" style="border-color:#f5a623;background:#fffaf0"><div class="alert-header">🧾 Rapport de correction · ${negCount} mouvement${negCount>1?'s':''} négatif${negCount>1?'s':''}</div><div class="alert-body"><b>Motif :</b> ${escHtml(rp.correctionReason||'Correction historique — motif initial non documenté')}</div></div>`:''}
+    ${renderCivilCumulative(cu)}
     ${entryReportNotice(rp)}
     ${renderAlerts(alerts)}
     ${alerts.length&&!materialTracking()?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
@@ -3331,12 +3334,14 @@ function pgDG(){
       ${activityRow('Conduite posée',synth.rates.fermeture,fmt(synth.totals.rem)+' ml','#36b37e')}
     </div>
     <div class="activity-group"><div class="activity-title"><span class="activity-dot" style="background:#0b7285"></span>Ouvrages GC</div>
-      ${activityRow('Avancement des regards',synth.gcProgressTotal>0?synth.rates.gc:null,synth.gcProgressTotal>0?`${synth.gcDone} / ${synth.gcTotal} réceptionnés`:'','#0b7285')}
+      ${synth.civil?activityRow('Avancement de l’ensemble GC',synth.rates.gc,'Familles pondérées','#0b7285'):activityRow('Avancement des regards',synth.gcProgressTotal>0?synth.rates.gc:null,synth.gcProgressTotal>0?`${synth.gcDone} / ${synth.gcTotal} réceptionnés`:'','#0b7285')}
     </div>
     <div class="activity-group"><div class="activity-title"><span class="activity-dot" style="background:#64748b"></span>Plans de récolement</div>
       ${activityRow('Localités couvertes',synth.recolementDone>0?synth.rates.recolement:null,synth.recolementDone>0?`${synth.recolementDone} / ${LOC.length} localités`:'','#64748b')}
     </div>
   </div>`;
+
+  h+=renderCivilCumulative(cu);
 
   // ── 1bis. Pilotage de l'achèvement du réseau ──
   const pilotage=getPilotageSettings();
@@ -3425,7 +3430,7 @@ function pgDG(){
     <div class="kc" style="border-left:4px solid ${projectionColor}">
       <div class="kl">Fin de chantier calculée</div>
       <div class="kv" style="font-size:18px;color:${projectionColor}">${projection.date?fD(projection.date):'Non estimée'}</div>
-      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires après la reprise':'Date de reprise non définie'}</div>
+      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires après la reprise':projection.civilPending?'Durées des GC complémentaires à définir avant une projection globale':'Date de reprise non définie'}</div>
       <span class="kb ${projection.date?'bbl':'bo'}">Cadence de projection : ${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}</span>
     </div>
   </div>`;
@@ -3944,7 +3949,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.7.3 — Saisie consolidée par le conducteur de travaux, 29/09/2026' ,
+      version_app:'2.8.1 — GC complémentaires et saisie consolidée, 30/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4640,7 +4645,7 @@ if(document.addEventListener){
 window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.7.3
+// Pièces jointes privées — SIYO Pilot 2.8.1
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4727,7 +4732,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.7.3');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.1');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -4743,6 +4748,293 @@ async function exportRapportWithFiles(){
  }catch(e){fileNotice('PDF non créé : '+(e.message||e));}finally{host?.remove();fileBusy(false);}
 }
 window.addEventListener('beforeunload',event=>{if(FILE_BUSY||syncing){event.preventDefault();event.returnValue='';}});
+
+// GC complémentaires, facultatifs : les projets sans civilWorks gardent leur calcul historique.
+const CIVIL_KINDS={borne:'Bornes',balise:'Balises',butee:'Butées',cloture:'Clôtures',terrassement_gc:'Terrassements GC',beton_proprete:'Béton de propreté',beton_structure:'Béton de structure',armatures:'Armatures',coffrage:'Coffrage',abri_cie:'Abri CIE',local_sterilisation:'Local de stérilisation',concession:'Aménagement de la concession',portail:'Portail et portillon',piste:'Piste d’accès'};
+const FENCE_STAGES={non_demarre:{label:'Non commencée',progress:0},fondation:{label:'Fondation achevée (jusqu’au chaînage bas)',progress:.30},elevation:{label:'Élévation achevée (murs, poteaux, chaînage haut)',progress:.90},finition:{label:'Finitions achevées (enduit et peinture)',progress:1}};
+const CIVIL_UNITS={terrassement_gc:'m³',beton_proprete:'m³',beton_structure:'m³',armatures:'kg',coffrage:'m²',concession:'m²',piste:'m²',portail:'ens.'};
+function civilUnit(kind){return CIVIL_UNITS[kind]||'u';}
+function civilInteger(w){return ['u','ens.'].includes(civilUnit(w.kind));}
+function civilIsStaged(w){return ['cloture','abri_cie','local_sterilisation'].includes(w.kind);}
+function civilNumber(v){return Number(v||0).toLocaleString('fr-FR',{maximumFractionDigits:3});}
+function civilValidQuantity(w,v){return typeof v==='number'&&Number.isFinite(v)&&Math.abs(v)<=Number.MAX_SAFE_INTEGER&&(civilInteger(w)?Number.isSafeInteger(v):Math.abs(v*1000-Math.round(v*1000))<.00001);}
+function civilDefaultPhases(){return [{id:'fondations',label:'Fondations achevées',weight:null},{id:'structure',label:'Structure et couverture achevées',weight:null},{id:'finitions',label:'Finitions prévues au poste achevées',weight:null}];}
+function civilStages(w){
+ if(w.kind==='cloture')return FENCE_STAGES;
+ const out={non_demarre:{label:'Non commencé',progress:0}};let cumulative=0;
+ for(const phase of w.phases||[]){cumulative+=(+phase.weight||0);out[phase.id]={label:phase.label,progress:Math.min(1,cumulative/100)};}return out;
+}
+function civilProgress(w,stage){return civilStages(w)[stage]?.progress||0;}
+function civilStageLabel(w,stage){return civilStages(w)[stage]?.label||'Non commencé';}
+function civilWorks(l){return Array.isArray(l?.civilWorks)?l.civilWorks:[];}
+function hasCivil(locs=LOC){return locs.some(l=>civilWorks(l).length);}
+function civilFamilies(locs){const out=[];if(locs.some(l=>l.regards>0))out.push('regards');for(const k of Object.keys(CIVIL_KINDS))if(locs.some(l=>civilWorks(l).some(w=>w.kind===k)))out.push(k);return out;}
+function civilLabel(k){return k==='regards'?'Regards':CIVIL_KINDS[k]||k;}
+function fenceProgress(stage){return FENCE_STAGES[stage]?.progress||0;}
+function civilSummary(locs,cu,cfg=PROJECT_CONFIG){
+ const families=civilFamilies(locs).map(kind=>{
+  let planned=0,done=0,progress=0;
+  for(const l of locs){const c=cu[l.id]||{};
+   if(kind==='regards'){planned+=l.regards||0;done+=c.gc||0;progress+=c.gcProgress||0;continue;}
+   for(const w of civilWorks(l).filter(w=>w.kind===kind)){
+    planned+=w.planned||0;
+    const v=c.civil?.[w.id];
+    if(civilIsStaged(w)){const p=civilProgress(w,v);progress+=p;done+=p===1?1:0;}
+    else {const n=Math.min(w.planned,Math.max(0,+v||0));done+=n;progress+=n;}
+   }
+  }
+  return {kind,planned,done,progress,rate:planned?Math.min(100,progress/planned*100):0,weight:+cfg.civilWeights?.[kind]||0};
+ });
+ const weight=families.reduce((s,f)=>s+f.weight,0);
+ return {families,rate:weight?families.reduce((s,f)=>s+f.rate*f.weight,0)/weight:0,weight,configured:families.every(f=>f.weight>0)&&weight>0};
+}
+function civilHistory(lid,wid){return dbDates().some(d=>db[d]?.finitions?.civil?.[lid]?.[wid]!==undefined);}
+function civilConfigErrors(cfg){
+ const errors=[];if(!hasCivil(cfg.localities||[])){
+  if(hasCivil(PROJECT_CONFIG.localities||[])&&dbDates().length)errors.push('Les ouvrages GC historiques ne peuvent pas être supprimés.');return errors;
+ }
+ if(!materialTracking(cfg))errors.push('Les nouveaux ouvrages GC nécessitent le suivi par matériau ; aucune conversion automatique des anciens projets.');
+ for(const l of cfg.localities||[]){const ids=new Set();for(const w of civilWorks(l)){
+  if(!/^[a-zA-Z0-9_-]+$/.test(w.id||'')||ids.has(w.id))errors.push(l.nm+' : identifiant d’ouvrage absent ou dupliqué.');ids.add(w.id);
+  if(!CIVIL_KINDS[w.kind]||!String(w.name||'').trim())errors.push(l.nm+' : type et nom d’ouvrage obligatoires.');
+  if(!civilValidQuantity(w,w.planned)||w.planned<=0||(civilIsStaged(w)&&w.planned!==1))errors.push(l.nm+' / '+w.name+' : quantité prévue positive requise ('+civilUnit(w.kind)+'), entière pour les unités ; une fiche par ouvrage à étapes.');
+  if(civilIsStaged(w)&&w.kind!=='cloture'){const phases=w.phases||[],ids=new Set(),total=phases.reduce((n,p)=>n+(+p.weight||0),0);if(!phases.length||phases.some(p=>!p.label?.trim()||!Number.isFinite(+p.weight)||+p.weight<=0||!/^phase_[0-9]+$|^(fondations|structure|finitions)$/.test(p.id)||ids.has(p.id)||(ids.add(p.id),false))||Math.abs(total-100)>.01)errors.push(l.nm+' / '+w.name+' : étapes nommées et pondérées requises, total 100 %.');}
+  const old=civilWorks(PROJECT_CONFIG.localities?.find(x=>x.id===l.id)).find(x=>x.id===w.id);
+  if(old&&civilHistory(l.id,w.id)&&(old.kind!==w.kind||w.planned<old.planned||JSON.stringify(old.phases||[])!==JSON.stringify(w.phases||[])))errors.push(l.nm+' / '+w.name+' : type, étapes et diminution du prévu protégés par l’historique.');
+ }
+ }
+ for(const l of PROJECT_CONFIG.localities||[])for(const w of civilWorks(l))if(civilHistory(l.id,w.id)&&!civilWorks(cfg.localities?.find(x=>x.id===l.id)).some(x=>x.id===w.id))errors.push('Ouvrage avec historique supprimé : '+l.nm+' / '+w.name);
+ const families=civilFamilies(cfg.localities),total=families.reduce((s,k)=>s+(+cfg.civilWeights?.[k]||0),0);
+ if(families.some(k=>!Number.isFinite(+cfg.civilWeights?.[k])||+cfg.civilWeights[k]<=0)||Math.abs(total-100)>.01)errors.push('Répartissez 100 % du poids GC entre les familles présentes, avec un poids positif pour chacune.');
+ return errors;
+}
+const projectConfigErrorsBeforeCivil=projectConfigErrors;
+projectConfigErrors=function(cfg){return [...projectConfigErrorsBeforeCivil(cfg),...civilConfigErrors(cfg)];};
+function civilDraftAdd(li){
+ if(!PARAM_DRAFT||!canAccessProjectSetup())return;
+ const kind=document.getElementById('civil_kind_'+li)?.value,l=PARAM_DRAFT.localities[li];if(!l||!CIVIL_KINDS[kind])return;
+ if(!materialTracking(PARAM_DRAFT)){alert('Le suivi GC complémentaire est disponible sur les projets avec suivi par matériau.');return;}
+ const name=prompt(kind==='cloture'?'Nom de la clôture (ex. Clôture du château) :':'Libellé du poste :',kind==='cloture'?'Clôture du château':CIVIL_KINDS[kind]);if(!name?.trim())return;
+ (l.civilWorks??=[]).push({id:'cw_'+crypto.randomUUID().replaceAll('-',''),kind,name:cleanText(name,120),planned:civilIsStaged({kind})?1:0,...(['abri_cie','local_sterilisation'].includes(kind)?{phases:civilDefaultPhases()}:{} )});
+ PARAM_DRAFT.civilWeights??={};saveProjectDraft();draw();
+}
+function civilDraftSet(li,wi,key,value){
+ if(!PARAM_DRAFT||!canAccessProjectSetup())return;const l=PARAM_DRAFT.localities[li],w=civilWorks(l)[wi];if(!w)return;
+ if(key==='name')w.name=cleanText(value,120);
+ if(key==='planned'){
+  const n=Number(value);if(!civilValidQuantity(w,n)||n<0){alert(civilInteger(w)?'Saisissez un nombre entier positif ou nul.':'Saisissez une quantité positive ou nulle, avec au plus trois décimales.');draw();return;}
+  if(civilHistory(l.id,w.id)&&n<w.planned){alert('La diminution du prévu est bloquée pour préserver l’historique.');draw();return;}w.planned=n;
+ }
+ saveProjectDraft();
+}
+function civilDraftRemove(li,wi){
+ if(!PARAM_DRAFT||!canAccessProjectSetup())return;const l=PARAM_DRAFT.localities[li],w=civilWorks(l)[wi];if(!w)return;
+ if(civilHistory(l.id,w.id)){alert('Cet ouvrage possède un historique et ne peut pas être supprimé.');return;}
+ if(!confirm('Retirer '+w.name+' du paramétrage ?'))return;l.civilWorks.splice(wi,1);saveProjectDraft();draw();
+}
+function civilDraftWeight(kind,value){if(!PARAM_DRAFT||!canAccessProjectSetup())return;PARAM_DRAFT.civilWeights??={};PARAM_DRAFT.civilWeights[kind]=value===''?null:Number(value);saveProjectDraft();}
+const renderParamWorksBeforeCivil=renderParamWorks;
+renderParamWorks=function(cfg){
+ let h=renderParamWorksBeforeCivil(cfg);if(!materialTracking(cfg))return h;
+ h+=`<div class="cd"><div class="ct">Ouvrages GC complémentaires</div><p class="saisie-note">Saisissez les quantités dans l’unité du poste. Les clôtures et bâtiments sont suivis individuellement par étapes achevées. Les terrassements et bétons GC concernent uniquement le périmètre de ces postes, pour ne pas recompter les travaux déjà inclus dans les clôtures ou les regards.</p>`;
+ cfg.localities.forEach((l,li)=>{
+  h+=`<section class="civil-front"><h3>${escHtml(l.nm)}</h3><div class="civil-grid">`;
+  civilWorks(l).forEach((w,wi)=>{h+=`<div class="civil-card"><span class="civil-tag">${civilLabel(w.kind)}</span><label>Ouvrage${PARAM_DRAFT?`<input class="fi" value="${escHtml(w.name)}" maxlength="120" onchange="civilDraftSet(${li},${wi},'name',this.value)">`:`<b>${escHtml(w.name)}</b>`}</label><label>Prévu (${civilUnit(w.kind)})${PARAM_DRAFT&&!civilIsStaged(w)?`<input class="fi" type="number" min="${civilInteger(w)?1:0.001}" step="${civilInteger(w)?1:0.001}" value="${w.planned}" onchange="civilDraftSet(${li},${wi},'planned',this.value)">`:`<b>${civilNumber(w.planned)} ${civilUnit(w.kind)}</b>`}</label>${w.kind==='cloture'?'<small>Fondation 30 % · Élévation 60 % · Finitions 10 %'+(w.referenceLength?' · Référence DQE : '+civilNumber(w.referenceLength)+' ml':'')+'</small>':civilIsStaged(w)?renderCivilPhases(w,li,wi):''}${PARAM_DRAFT?`<button class="bs" onclick="civilDraftRemove(${li},${wi})">Retirer</button>`:''}</div>`;});
+  h+='</div>';
+  if(PARAM_DRAFT)h+=`<div class="civil-add"><select class="fi" id="civil_kind_${li}" aria-label="Type d’ouvrage à ajouter">${Object.entries(CIVIL_KINDS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><button class="bs" onclick="civilDraftAdd(${li})">+ Ajouter un poste GC</button></div>`;
+  h+='</section>';
+ });
+ h+='</div>';
+ if(hasCivil(cfg.localities)){
+  const families=civilFamilies(cfg.localities);
+  h+=`<div class="cd"><div class="ct">Répartition du poids GC</div><p>Ces parts répartissent le poids « Ouvrages GC » de l’avancement physique. Une famille nombreuse ne doit pas écraser les autres. La Direction définit une répartition justifiée, totalisant 100 %. À l’intérieur d’une famille, l’avancement correspond à la quantité réalisée rapportée au prévu dans la même unité. Chaque bâtiment ou clôture est suivi séparément. Les m³, kg et m² ne sont jamais additionnés.</p><div class="civil-grid">${families.map(k=>`<label class="civil-card">${civilLabel(k)} — part du GC (%)${PARAM_DRAFT?`<input class="fi" type="number" min="0.01" max="100" step="0.01" value="${cfg.civilWeights?.[k]??''}" placeholder="À définir" onchange="civilDraftWeight('${k}',this.value)">`:`<b>${cfg.civilWeights?.[k]??'À définir'} %</b>`}</label>`).join('')}</div><p class="saisie-note">Une révision de ces références recalcule les indicateurs avec les références actives, comme les autres paramètres du projet. Elle doit être justifiée dans le motif de révision.</p></div>`;
+ }
+ return h;
+};
+const renderParamRulesBeforeCivil=renderParamRules;
+renderParamRules=function(cfg){let h=renderParamRulesBeforeCivil(cfg);if(hasCivil(cfg.localities)){h=h.replaceAll('Les regards sont comptés une seule fois.','Les ouvrages GC sont comptés une seule fois, selon la répartition définie dans l’onglet Ouvrages.').replaceAll('Sans regards,','Sans ouvrages GC,').replace('>Regards</td>','>Ouvrages GC</td>');h+='<div class="cd"><div class="ct">Clôtures — trois phases</div><p>Fondation jusqu’au chaînage bas : 30 %.</p><p>Élévation, poteaux et chaînage haut : 60 % supplémentaires, soit 90 % cumulés.</p><p>Enduit et peinture : 10 % supplémentaires, soit 100 % cumulés.</p></div>';}return h;};
+
+// Les unités sont des mouvements journaliers ; les clôtures, des états datés.
+const cumulBeforeCivil=cumul;
+cumul=function(upTo){
+ const c=cumulBeforeCivil(upTo);if(!hasCivil())return c;
+ for(const l of LOC){c[l.id].civil={};for(const w of civilWorks(l))c[l.id].civil[w.id]=civilIsStaged(w)?'non_demarre':0;}
+ for(const date of dbDates().filter(d=>d<=upTo).sort())for(const l of LOC)for(const w of civilWorks(l)){
+  const v=db[date]?.finitions?.civil?.[l.id]?.[w.id];if(!v)continue;
+  if(civilIsStaged(w)){if(civilStages(w)[v.stage])c[l.id].civil[w.id]=v.stage;}
+  else if(typeof v.quantity==='number'&&Number.isFinite(v.quantity))c[l.id].civil[w.id]+=v.quantity;
+ }
+ return c;
+};
+function renderCivilEntry(ex,before){
+ if(!hasCivil())return'';
+ let h='<div class="cd"><div class="ct">Autres ouvrages GC</div><p class="saisie-note">Saisissez la quantité réalisée ce jour dans l’unité indiquée, jamais le cumul. Pour les ouvrages à étapes, indiquez seulement une nouvelle étape entièrement achevée. Un état inchangé ne nécessite aucune saisie.</p>';
+ LOC.forEach((l,li)=>{if(!civilWorks(l).length)return;h+=`<section class="civil-front"><h3>${escHtml(l.nm)}</h3><div class="civil-grid">`;
+ civilWorks(l).forEach((w,wi)=>{const saved=ex?.finitions?.civil?.[l.id]?.[w.id]||{},v=before[l.id]?.civil?.[w.id];
+  h+=`<div class="civil-card"><b>${escHtml(w.name)}</b><span class="civil-tag">${civilLabel(w.kind)}</span>`;
+  if(civilIsStaged(w))h+=`<small>Avant ce rapport : ${escHtml(civilStages(w)[v]?.label||civilStages(w).non_demarre.label)}</small><label>Nouvelle étape achevée<select class="fi" id="civ_${li}_${wi}">${statusSelectOptions(civilStages(w),saved.stage||'')}</select></label>`;
+  else h+=`<small>Avant ce rapport : ${civilNumber(+v||0)} / ${civilNumber(w.planned)} ${civilUnit(w.kind)}</small><label>Quantité réalisée ce jour (${civilUnit(w.kind)})<input class="fi movement-input" type="number" ${ex?.kind==='correction'?'':'min="0"'} step="${civilInteger(w)?1:0.001}" id="civ_${li}_${wi}" value="${escHtml(String(saved.quantity??''))}" placeholder="0"></label>`;
+  h+=`<label>Observation / référence<input class="fi" maxlength="500" id="civnote_${li}_${wi}" value="${escHtml(saved.note||'')}" placeholder="Facultatif"></label></div>`;
+ });h+='</div></section>';});return h+'</div>';
+}
+const pgSaisieFinitionsBeforeCivil=pgSaisieFinitions;
+pgSaisieFinitions=function(ex,before){return renderCivilEntry(ex,before)+pgSaisieFinitionsBeforeCivil(ex,before);};
+const collectBeforeCivil=collect;
+collect=function(){const data=collectBeforeCivil();if(!hasCivil())return data;data.finitions.civil={};LOC.forEach((l,li)=>civilWorks(l).forEach((w,wi)=>{
+ const el=document.getElementById(`civ_${li}_${wi}`),note=cleanText(document.getElementById(`civnote_${li}_${wi}`)?.value||'',500);
+ const raw=el?.value??'';if(raw==='')return;
+ const v=civilIsStaged(w)?{stage:raw,note}:{quantity:Number(raw),note};(data.finitions.civil[l.id]??={})[w.id]=v;
+}));return applyEntryStatus(data);};
+const reportFinishingRowsBeforeCivil=reportFinishingRows;
+reportFinishingRows=function(rp,zoneFilter=''){
+ const rows=reportFinishingRowsBeforeCivil(rp,zoneFilter);
+ for(const l of LOC.filter(l=>!zoneFilter||l.z===zoneFilter))for(const w of civilWorks(l)){
+  const v=rp?.finitions?.civil?.[l.id]?.[w.id];if(!v)continue;
+  if(civilIsStaged(w)?!civilStages(w)[v.stage]:!Number.isFinite(v.quantity))continue;
+  if(!civilIsStaged(w)&&v.quantity===0&&!v.note)continue;
+  rows.push({type:civilLabel(w.kind),localite:l.nm,ouvrage:w.name,etat:civilIsStaged(w)?civilStages(w)[v.stage].label:civilNumber(v.quantity)+' '+civilUnit(w.kind)+(civilInteger(w)?' terminées ce jour':' réalisés ce jour'),note:v.note||'',reference:''});
+ }return rows;
+};
+const countNegativeMovementsBeforeCivil=countNegativeMovements;
+countNegativeMovements=function(rp){let n=countNegativeMovementsBeforeCivil(rp);for(const works of Object.values(rp?.finitions?.civil||{}))for(const v of Object.values(works))if(v?.quantity<0)n++;return n;};
+function civilReportError(data){
+ if(!hasCivil())return Object.keys(data.finitions?.civil||{}).length?'Ouvrages GC absents du paramétrage.':'';
+ const before=cumul(dbDates().filter(d=>d<SD).sort().pop()||'0000-00-00');
+ for(const [lid,values] of Object.entries(data.finitions?.civil||{})){
+  const l=LOC.find(l=>l.id===lid);if(!l)return'Front GC inconnu.';
+  for(const [id,v] of Object.entries(values)){
+   const w=civilWorks(l).find(w=>w.id===id);if(!w)return'Ouvrage GC inconnu.';
+   if(civilIsStaged(w)){
+    if(!civilStages(w)[v.stage])return w.name+' : étape invalide.';
+    if(civilProgress(w,v.stage)<civilProgress(w,before[l.id]?.civil?.[id])&&(data.kind!=='correction'||!data.correctionReason?.trim()))return w.name+' : revenir à une étape antérieure nécessite une correction motivée.';
+   }else if(!civilValidQuantity(w,v.quantity)||(v.quantity<0&&data.kind!=='correction'))return w.name+' : quantité valide requise en '+civilUnit(w.kind)+(civilInteger(w)?' (nombre entier)':' (trois décimales maximum)')+' ; une diminution nécessite une correction motivée.';
+  }
+ }
+ // Contrôle toute la chronologie : une correction passée ne doit pas rendre un cumul futur négatif ou excédentaire.
+ const candidate={...db,[SD]:data},counts={};
+ for(const date of Object.keys(candidate).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort())for(const l of LOC)for(const w of civilWorks(l).filter(w=>!civilIsStaged(w))){
+  const key=l.id+'|'+w.id,v=candidate[date]?.finitions?.civil?.[l.id]?.[w.id]?.quantity;
+  counts[key]=(counts[key]||0)+(typeof v==='number'&&Number.isFinite(v)?v:0);
+  if(counts[key]<-.000001||counts[key]>w.planned+.000001)return l.nm+' / '+w.name+' : cumul '+civilNumber(counts[key])+' '+civilUnit(w.kind)+' au '+fD(date)+', pour '+w.planned+' prévues. Vérifiez les mouvements ou faites réviser le prévu.';
+ }
+ return'';
+}
+const reportValueErrorBeforeCivil=reportValueError;
+reportValueError=function(data){return reportValueErrorBeforeCivil(data)||civilReportError(data);};
+
+function civilCumulativeLines(locs,cu){
+ const summary=civilSummary(locs,cu),lines=[];
+ for(const f of summary.families.filter(f=>f.kind!=='regards'&&!civilIsStaged({kind:f.kind})))lines.push(civilLabel(f.kind)+': '+civilNumber(f.done)+' / '+civilNumber(f.planned)+' '+civilUnit(f.kind)+' ('+f.rate.toFixed(1)+'%)');
+ for(const l of locs)for(const w of civilWorks(l).filter(w=>civilIsStaged(w))){const stage=cu[l.id]?.civil?.[w.id]||'non_demarre';lines.push(l.nm+' — '+w.name+': '+(civilStages(w)[stage]?.label||'Non commencée')+' ('+(civilProgress(w,stage)*100).toFixed(0)+'%)');}
+ return lines;
+}
+function renderCivilCumulative(cu,locs=LOC){
+ if(!hasCivil(locs))return'';
+ return`<section class="cd civil-summary"><div class="ct">Situation des ouvrages GC</div><div class="civil-grid">${locs.filter(l=>civilWorks(l).length).map(l=>`<div class="civil-card"><b>${escHtml(l.nm)}</b>${civilWorks(l).map(w=>{const v=cu[l.id]?.civil?.[w.id],pct=civilIsStaged(w)?civilProgress(w,v)*100:Math.min(100,Math.max(0,(+v||0)/w.planned*100));return`<div class="civil-state"><span>${escHtml(w.name)}</span><b>${civilIsStaged(w)?pct.toFixed(0)+' %':civilNumber(+v||0)+' / '+civilNumber(w.planned)+' '+civilUnit(w.kind)}</b><small>${civilIsStaged(w)?escHtml(civilStages(w)[v]?.label||'Non commencée'):civilLabel(w.kind)}</small></div>`;}).join('')}</div>`).join('')}</div></section>`;
+}
+const whatsappCumulativeLinesBeforeCivil=whatsappCumulativeLines;
+whatsappCumulativeLines=function(s,cu){
+ const lines=whatsappCumulativeLinesBeforeCivil(s,cu);if(!hasCivil(s.locs))return lines;
+ const summary=civilSummary(s.locs,cu),reg=summary.families.find(f=>f.kind==='regards');
+ const ix=lines.findIndex(x=>x.includes('Regards GC:'));if(ix>=0)lines[ix]='  ▸ Regards GC: '+(reg?.rate||0).toFixed(1)+'% · '+s.gcDone+'/'+s.gcTotal+' terminés';
+ const at=lines.findIndex(x=>x.includes('Rinçage-désinfection:'));
+ lines.splice(at<0?lines.length:at,0,'  ▸ Avancement GC pondéré: '+summary.rate.toFixed(1)+'%',...civilCumulativeLines(s.locs,cu).map(x=>'  ▸ '+x));return lines;
+};
+// Production par famille : pas d’addition trompeuse de bornes et de clôtures.
+function civilPeriod(from,to,locs=LOC){
+ const out=civilFamilies(locs).filter(k=>k!=='regards').map(kind=>({kind,production:0,corrections:0,known:false,updates:[]}));
+ const stages={};
+ for(const date of dbDates().filter(d=>d<=to).sort()){
+  const rp=db[date],inside=date>=from;
+  for(const l of locs)for(const w of civilWorks(l)){
+   const row=out.find(x=>x.kind===w.kind),v=rp?.finitions?.civil?.[l.id]?.[w.id],key=l.id+'|'+w.id;
+   if(inside&&entryConfirmed(rp,l.id))row.known=true;
+   if(!v)continue;
+   let delta=0;
+   if(civilIsStaged(w)){
+    if(!civilStages(w)[v.stage])continue;
+    delta=Number(civilProgress(w,v.stage)===1)-Number(civilProgress(w,stages[key])===1);
+    if(inside&&v.stage!==(stages[key]||'non_demarre'))row.updates.push({date,locality:l.nm,name:w.name,stage:v.stage,label:civilStageLabel(w,v.stage),correction:rp.kind==='correction'});
+    stages[key]=v.stage;
+   }else delta=Number.isFinite(v.quantity)?v.quantity:0;
+   if(!inside)continue;row.known=true;
+   if(rp.kind==='correction'||delta<0)row.corrections+=delta;else row.production+=delta;
+  }
+ }
+ return out;
+}
+function renderCivilPeriod(from,to,locs,days=null,complete=false){
+ const rows=civilPeriod(from,to,locs);if(!rows.length)return'';
+ return`<div class="cd civil-period"><div class="ct">Production GC complémentaire</div><p class="saisie-note">${fD(from)} → ${fD(to)} · Quantités terminées par famille. Les étapes des bâtiments et clôtures sont détaillées séparément.${days===null?'':' Cadence sur '+days+' jours de référence (lundi–samedi)'+(complete?'':', provisoire')+'.'}</p><div class="civil-grid">${rows.map(r=>`<div class="civil-card"><b>${civilLabel(r.kind)}</b><span>Production : <strong>${r.known?civilNumber(r.production):'—'} ${civilUnit(r.kind)}</strong></span>${days===null?'':`<span>Cadence : <strong>${r.known&&days>0?weeklyFormat(r.production/days):'—'} ${civilUnit(r.kind)}/j</strong></span>`}<small>Corrections : ${r.known?civilNumber(r.corrections):'—'} ${civilUnit(r.kind)} · Bilan net : ${r.known?civilNumber(r.production+r.corrections):'—'} ${civilUnit(r.kind)}</small>${r.updates.map(u=>`<small>${fD(u.date)} · ${escHtml(u.locality)} / ${escHtml(u.name)} : ${escHtml(u.label)}${u.correction?' (correction)':''}</small>`).join('')}</div>`).join('')}</div></div>`;
+}
+const pgWeeklyBeforeCivil=pgWeekly;
+pgWeekly=function(embedded=false){let h=pgWeeklyBeforeCivil(embedded);if(!hasCivil())return h;const state=weeklyState(),m=weeklyModel(state.date,today(),state.zone),locs=LOC.filter(l=>m.zone===null||l.z===m.zone);h=h.replaceAll('Ouvrages terminés','Regards terminés').replace('>Ouvrages</div>','>Regards</div>');return h+renderCivilPeriod(m.monday,m.to,locs,m.start?m.expected.length:0,m.complete);};
+const weeklyTextBeforeCivil=weeklyText;
+weeklyText=function(m){let text=weeklyTextBeforeCivil(m);const locs=LOC.filter(l=>m.zone===null||l.z===m.zone);if(!hasCivil(locs))return text;text=text.replaceAll('Ouvrages terminés','Regards terminés');text+='\n\n*GC COMPLÉMENTAIRE*\n';for(const r of civilPeriod(m.monday,m.to,locs)){
+ text+=civilLabel(r.kind)+': '+(r.known?civilNumber(r.production):'—')+' '+civilUnit(r.kind)+' · cadence '+(r.known&&m.start&&m.expected.length?weeklyFormat(r.production/m.expected.length):'—')+' '+civilUnit(r.kind)+'/j'+(m.complete?'':' (provisoire)')+'\n  Corrections : '+(r.known?civilNumber(r.corrections):'—')+' '+civilUnit(r.kind)+' · bilan net : '+(r.known?civilNumber(r.production+r.corrections):'—')+' '+civilUnit(r.kind)+'\n';
+ for(const u of r.updates)text+='  '+fD(u.date)+' · '+u.locality+' / '+u.name+' : '+u.label+(u.correction?' (correction)':'')+'\n';
+ }return text;};
+const renderMonthlyWorksBeforeCivil=renderMonthlyWorks;
+renderMonthlyWorks=function(months){let h=renderMonthlyWorksBeforeCivil(months);if(!hasCivil())return h;h=h.replace('Ouvrages GC (u)','Regards (u)').replace('Aucun ouvrage GC prévu','Aucun regard prévu');for(const month of months.filter(m=>m<=today().slice(0,7))){const end=endOfAttachMonth(month);h+=renderCivilPeriod(month+'-01',end<today()?end:today(),LOC);}return h;};
+const projectionCadencesBeforeCivil=projectionCadences;
+projectionCadences=function(synth,settings){const p=projectionCadencesBeforeCivil(synth,settings);if(hasCivil()&&synth.civil?.families.some(f=>f.kind!=='regards'&&f.done<f.planned)){
+ p.date=null;p.totalDays=null;p.deltaTarget=null;p.civilPending=true;
+ }return p;};
+Object.assign(window,{civilDraftAdd,civilDraftSet,civilDraftRemove,civilDraftWeight});
+function appendCivilExportSheet(wb,cu){
+ if(!hasCivil())return;
+ const rows=[['Front','Type','Ouvrage','Prévu','Réalisé','Avancement','État','Unité']];
+ for(const l of LOC){
+  if(l.regards)rows.push([l.nm,'Regards','Ensemble des regards',l.regards,cu[l.id]?.gc||0,(cu[l.id]?.gcProgress||0)/l.regards,'Voir les états individuels du rapport','u']);
+  for(const w of civilWorks(l)){const v=cu[l.id]?.civil?.[w.id],fence=civilIsStaged(w);rows.push([l.nm,civilLabel(w.kind),w.name,w.planned,fence?Number(civilProgress(w,v)===1):+v||0,fence?civilProgress(w,v):Math.min(1,Math.max(0,(+v||0)/w.planned)),fence?(civilStages(w)[v]?.label||'Non commencée'):'Quantité réalisée',civilUnit(w.kind)]);}
+ }
+ const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=[{wch:22},{wch:18},{wch:38},{wch:16},{wch:16},{wch:16},{wch:60},{wch:12}];for(let r=1;r<rows.length;r++){const cell=ws[XLSX.utils.encode_cell({r,c:5})];if(cell)cell.z='0.0%';}XLSX.utils.book_append_sheet(wb,ws,'Ouvrages GC');
+}
+function renderCivilPhases(w,li,wi){
+ return `<div class="civil-phases"><small>Étapes de cet ouvrage — poids à définir, total 100 %</small>${(w.phases||[]).map((p,pi)=>`<label>Étape ${pi+1}${PARAM_DRAFT?`<input class="fi" maxlength="120" value="${escHtml(p.label)}" onchange="civilDraftPhase(${li},${wi},${pi},'label',this.value)"><input aria-label="Poids de l’étape ${pi+1} en pourcentage" class="fi" type="number" min="0.01" max="100" step="0.01" value="${p.weight??''}" placeholder="Poids (%) à définir" onchange="civilDraftPhase(${li},${wi},${pi},'weight',this.value)">`:`<b>${escHtml(p.label)} · ${p.weight??'À définir'} %</b>`}</label>`).join('')}</div>`;
+}
+function civilDraftPhase(li,wi,pi,key,value){
+ if(!PARAM_DRAFT||!canAccessProjectSetup())return;const l=PARAM_DRAFT.localities[li],w=civilWorks(l)[wi],p=w?.phases?.[pi];if(!p)return;
+ if(civilHistory(l.id,w.id)){alert('Les étapes d’un ouvrage ayant des rapports sont conservées pour protéger son historique.');draw();return;}
+ if(key==='label')p.label=cleanText(value,120);if(key==='weight')p.weight=value===''?null:Number(value);saveProjectDraft();
+}
+function canPrepareMitrevi(){return !!PARAM_DRAFT&&materialTracking(PARAM_DRAFT)&&!dbDates().length&&!hasCivil(PARAM_DRAFT.localities)&&PARAM_DRAFT.localities.every(l=>!l.regards&&(l.zones||[]).every(z=>Object.values(z.dn||{}).every(q=>!+q)));}
+function prepareMitreviDraft(){
+ if(!canAccessProjectSetup()||!canPrepareMitrevi()){alert('Le préremplissage est réservé à un projet vierge, sans rapport ni quantités prévues.');return;}
+ if(!confirm('Préremplir les fronts Bonguera et Kondossou selon les deux DQE et les corrections validées ? Les dates, le planning et les pondérations resteront à définir.'))return;
+ const work=(id,kind,name,planned,source)=>({id,kind,name,planned,source,...(['abri_cie','local_sterilisation'].includes(kind)?{phases:civilDefaultPhases()}:{} )});
+ function works(bonguera){return[
+  work('bornes','borne','Bornes de repérage',bonguera?290:136,'2.9.1 + 7.1.9.1'),
+  work('balises','balise','Balises de repérage',bonguera?72:34,'2.9.2 + 7.1.9.2'),
+  {...work('cloture_chateau','cloture','Clôture du château',1,'3.1.9'),referenceLength:76},
+  work('terrassement_chateau','terrassement_gc','Terrassements GC du château, remblayage compris',58,'3.1.1'),
+  work('proprete_chateau','beton_proprete','Béton de propreté du château',10,'3.1.3'),
+  work('beton_chateau','beton_structure','Béton de structure du château',30,'3.1.4'),
+  work('armatures_chateau','armatures','Armatures posées du château',1720,'3.1.5'),
+  work('coffrage_chateau','coffrage','Coffrage du château',30,'3.1.6'),
+  work('abri_cie','abri_cie','Abri double CIE et armoire électrique',1,'3.1.10'),
+  work('concession','concession','Aménagement de la concession',400,'3.1.11'),
+  work('portail','portail','Portail et portillon posés',1,'3.1.12'),
+  work('piste','piste','Piste aménagée, passage busé compris',350,'3.1.14 — piste'),
+  work('local_sterilisation','local_sterilisation','Construction du local de stérilisation',1,'5.1')
+ ];}
+ PARAM_DRAFT.localities=[
+  {id:'bonguera',nm:'Bonguera',z:'Bonguera',regards:5,civilWorks:works(true),zones:[{zid:'refoulement',nm:'Refoulement',material:'PVC',dn:{110:2662}},{zid:'distribution',nm:'Distribution',material:'PVC',dn:{63:9625,90:2077.9,110:165}}]},
+  {id:'kondossou',nm:'Kondossou',z:'Kondossou',regards:4,civilWorks:works(false),zones:[{zid:'refoulement',nm:'Refoulement',material:'PVC',dn:{110:1657.7}},{zid:'distribution',nm:'Distribution',material:'PVC',dn:{63:4334,90:797.5}}]}
+ ];
+ PARAM_DRAFT.weights=Object.fromEntries(Object.keys(PARAM_DRAFT.weights).map(k=>[k,0]));
+ PARAM_DRAFT.civilWeights=Object.fromEntries(civilFamilies(PARAM_DRAFT.localities).map(k=>[k,null]));
+ PARAM_DRAFT.scopeReview={template:'mitrevi-dqe-2026-09-30',sources:['DQE BONGUERA 50 m3 RENSEIGNE FINAL','DQE KONDOSSOU 50 m3 RENSEIGNE FINAL'],decisions:['Butées exclues du suivi','Aucune clôture de forage','Refoulement DN110 Bonguera confirmé à 2662 m'],notes:['Linéaires E/F conservés avec leurs décimales, sauf la correction Bonguera confirmée','Abri CIE compté une seule fois ; seconde mention sans quantité','Regards injection et by-pass inclus dans les 5 et 4 regards','Robinet altimétrique, équipement de stérilisation et raccordement électrique ne font pas partie du périmètre GC de ce modèle']};
+ normalizeProjectConfig(PARAM_DRAFT);PARAM_SELECTED_LOC='bonguera';saveProjectDraft();draw();toast('Références préremplies — complétez les étapes, les poids et le planning avant validation');
+}
+const renderParamWorksBeforeMitrevi=renderParamWorks;
+renderParamWorks=function(cfg){
+ const starter=canPrepareMitrevi()?'<div class="cd"><div class="ct">Préparer Mitrévi</div><p>Préremplir Bonguera et Kondossou à partir des DQE : deux clôtures de château, aucune butée, refoulement DN110 de Bonguera à 2 662 m.</p><button class="bp" onclick="prepareMitreviDraft()">Préremplir les références de Mitrévi</button></div>':'';
+ const notes=cfg.scopeReview?.template==='mitrevi-dqe-2026-09-30'?`<div class="cd"><div class="ct">Périmètre retenu — Mitrévi</div><p>${cfg.scopeReview.decisions.map(escHtml).join(' · ')}.</p><p class="saisie-note">${cfg.scopeReview.notes.map(escHtml).join('. ')}.</p></div>`:'';
+ return starter+notes+renderParamWorksBeforeMitrevi(cfg);
+};
+Object.assign(window,{civilDraftPhase,prepareMitreviDraft});
+
 
 init().catch(e=>{V='login';draw();toast('Connexion impossible : '+(e.message||e));});
 </script>
@@ -5028,6 +5320,8 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .history-secured{color:#23835d;font-size:12px}.history-error{color:#b42318}.report-revision-reason{border-left:4px solid #2c7be5}
 @media(max-width:700px){.history-controls label,.history-controls .fi{width:100%}}
 .entry-report-notice{border-left:4px solid #f5a623;background:#fffaf0;font-size:12px}.entry-report-notice p{margin:4px 0}
+
+.civil-front{padding:16px 0;border-top:1px solid #e2e8f0}.civil-front h3{font-size:15px;margin:0 0 12px}.civil-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.civil-card{display:flex;flex-direction:column;gap:10px;background:#f7fafc;border:1px solid #dbe6ed;border-radius:10px;padding:15px;min-width:0;overflow-wrap:anywhere}.civil-card label{display:flex;flex-direction:column;gap:5px;font-size:12px}.civil-card small{font-size:12px;color:#526175;line-height:1.5}.civil-card .fi{width:100%;min-width:0}.civil-tag{font-size:11px;color:#0b7285;font-weight:600}.civil-add{display:flex;gap:10px;align-items:center;margin-top:12px}.civil-add .fi{max-width:220px}.civil-state{display:grid;grid-template-columns:1fr auto;gap:6px;border-top:1px solid #dbe6ed;padding-top:10px}.civil-state small{grid-column:1/-1}.civil-period strong{font-size:18px;color:#0b7285}.civil-summary{margin-top:16px}@media(max-width:600px){.civil-grid{grid-template-columns:1fr}.civil-add{align-items:stretch;flex-direction:column}.civil-add .fi{max-width:none}}@media print{.civil-card{break-inside:avoid}.civil-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </body>
 </html>
