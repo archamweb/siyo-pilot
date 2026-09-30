@@ -1653,9 +1653,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.1</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.3</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.1</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.3</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -1795,7 +1795,7 @@ function renderParamNetwork(cfg){
   return`<div class="cd"><div class="param-section-head"><div><div class="ct">Structure du réseau</div><span>Les linéaires des zones, des fronts et du projet sont calculés automatiquement depuis les DN.</span></div><div class="param-total"><small>Total projet</small><b>${fmt(projectConfigTotal(cfg))} ml</b></div></div><div class="param-network-layout">${list}${detail}</div><div class="saisie-note">Un front ou une zone déjà utilisé par un rapport reste verrouillé. Les nouveaux éléments créés dans la révision peuvent être supprimés avant validation.</div></div>`;
 }
 function renderParamWorks(cfg){
-  return`<div class="param-two-col"><div class="cd"><div class="ct">Regards et ouvrages GC</div><div class="param-regard-list">${cfg.localities.map(l=>`<label><span>${escHtml(l.nm)}</span>${PARAM_DRAFT?`<input type="number" min="0" step="1" value="${l.regards||0}" onchange="projectDraftLocality('${l.id}','regards',this.value,'number')">`:`<b>${l.regards||'N/A'}</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Jalons de clôture</div><div class="param-readonly-list"><div><b>Essais de pression</b><span>Suivi en linéaire validé</span></div><div><b>Rinçage-désinfection</b><span>Validation par localité</span></div><div><b>Plans de récolement</b><span>Validation par localité</span></div></div><div class="saisie-note">Les pourcentages intermédiaires des regards restent calculés en interne à partir des états terrain.</div></div></div>`;
+  return`<div class="param-two-col"><div class="cd"><div class="ct">Regards de visite</div><div class="param-regard-list">${cfg.localities.map(l=>`<label><span>${escHtml(l.nm)}</span>${PARAM_DRAFT?`<input type="number" min="0" step="1" value="${l.regards||0}" onchange="projectDraftLocality('${l.id}','regards',this.value,'number')">`:`<b>${l.regards||'N/A'}</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Jalons de clôture</div><div class="param-readonly-list"><div><b>Essais de pression</b><span>Suivi en linéaire validé</span></div><div><b>Rinçage-désinfection</b><span>Validation par localité</span></div><div><b>Plans de récolement</b><span>Validation par localité</span></div></div><div class="saisie-note">Les pourcentages intermédiaires des regards restent calculés en interne à partir des états terrain.</div></div></div>`;
 }
 function renderParamRules(cfg){
   if(materialTracking(cfg)){
@@ -1856,7 +1856,7 @@ function pgSaisieFinitions(ex,cuBefore){
   ZN.forEach(zone=>{
     const locs=LOC.filter(l=>l.z===zone&&l.regards>0);
     if(!locs.length)return;
-    h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Regards et ouvrages GC — Zone ${escHtml(zone)}</div>`;
+    h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Regards de visite — Zone ${escHtml(zone)}</div>`;
     locs.forEach(l=>{
       const savedRegards=ex?.finitions?.regards?.[l.id]||{};
       const savedMeta=ex?.finitions?.gcMeta?.[l.id]||{};
@@ -3949,7 +3949,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.8.1 — GC complémentaires et saisie consolidée, 30/09/2026' ,
+      version_app:'2.8.3 — GC complémentaires et saisie consolidée, 30/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4645,7 +4645,7 @@ if(document.addEventListener){
 window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.8.1
+// Pièces jointes privées — SIYO Pilot 2.8.3
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4732,7 +4732,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.1');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.3');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -4750,7 +4750,7 @@ async function exportRapportWithFiles(){
 window.addEventListener('beforeunload',event=>{if(FILE_BUSY||syncing){event.preventDefault();event.returnValue='';}});
 
 // GC complémentaires, facultatifs : les projets sans civilWorks gardent leur calcul historique.
-const CIVIL_KINDS={borne:'Bornes',balise:'Balises',butee:'Butées',cloture:'Clôtures',terrassement_gc:'Terrassements GC',beton_proprete:'Béton de propreté',beton_structure:'Béton de structure',armatures:'Armatures',coffrage:'Coffrage',abri_cie:'Abri CIE',local_sterilisation:'Local de stérilisation',concession:'Aménagement de la concession',portail:'Portail et portillon',piste:'Piste d’accès'};
+const CIVIL_KINDS={borne:'Bornes',bac:'BAC',balise:'Balises',butee:'Butées',cloture:'Clôtures',terrassement_gc:'Terrassements GC',beton_proprete:'Béton de propreté',beton_structure:'Béton de structure',armatures:'Armatures',coffrage:'Coffrage',abri_cie:'Abri CIE',local_sterilisation:'Local de stérilisation',concession:'Aménagement de la concession',portail:'Portail et portillon',piste:'Piste d’accès'};
 const FENCE_STAGES={non_demarre:{label:'Non commencée',progress:0},fondation:{label:'Fondation achevée (jusqu’au chaînage bas)',progress:.30},elevation:{label:'Élévation achevée (murs, poteaux, chaînage haut)',progress:.90},finition:{label:'Finitions achevées (enduit et peinture)',progress:1}};
 const CIVIL_UNITS={terrassement_gc:'m³',beton_proprete:'m³',beton_structure:'m³',armatures:'kg',coffrage:'m²',concession:'m²',piste:'m²',portail:'ens.'};
 function civilUnit(kind){return CIVIL_UNITS[kind]||'u';}
@@ -5016,7 +5016,8 @@ function prepareMitreviDraft(){
   work('concession','concession','Aménagement de la concession',400,'3.1.11'),
   work('portail','portail','Portail et portillon posés',1,'3.1.12'),
   work('piste','piste','Piste aménagée, passage busé compris',350,'3.1.14 — piste'),
-  work('local_sterilisation','local_sterilisation','Construction du local de stérilisation',1,'5.1')
+  work('local_sterilisation','local_sterilisation','Construction du local de stérilisation',1,'5.1'),
+  work('bac_dn100','bac','BAC DN100',bonguera?9:7,'2.8.2.5 + 7.1.8.3.3')
  ];}
  PARAM_DRAFT.localities=[
   {id:'bonguera',nm:'Bonguera',z:'Bonguera',regards:5,civilWorks:works(true),zones:[{zid:'refoulement',nm:'Refoulement',material:'PVC',dn:{110:2662}},{zid:'distribution',nm:'Distribution',material:'PVC',dn:{63:9625,90:2077.9,110:165}}]},
