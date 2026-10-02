@@ -348,7 +348,7 @@ async function savePilotageSettings(){
     };
   }catch(err){toast(err.message);return;}
   if(poseRateSource==='manual'&&numeric.manualPoseRate<=0){toast('La cadence manuelle de pose doit être supérieure à zéro.');return;}
-  if(numeric.testRate<=0||numeric.gcDaysPer<=0){toast('Les cadences d’essais et de regards doivent être supérieures à zéro.');return;}
+  if(numeric.testRate<=0||(!projectionUsesGCAllowance()&&numeric.gcDaysPer<=0)){toast('Les cadences d’essais et de regards doivent être supérieures à zéro.');return;}
   if(restartMode==='date'&&targetMode==='date'&&restartDate>targetDate){
     toast('La reprise est postérieure à l’échéance : la cible est déjà impossible.');
   }
@@ -364,7 +364,7 @@ async function savePilotageSettings(){
   const history=Array.isArray(previous.history)?[...previous.history]:[];
   if(previous.updatedAt)history.push({...previous,history:undefined,remplaceLe:new Date().toISOString()});
   const settings={
-    ...previous,...numeric,gcProjection,workingDays,pauseStart,pauseEnd,
+    ...previous,...numeric,gcProjection,workingDays,pauseStart,pauseEnd,...(projectionUsesGCAllowance()?{gcAllowanceDays:MITRELLI_GC_ALLOWANCE_DAYS}:{}),
     targetMode,targetDate:targetMode==='date'?targetDate:'',
     restartMode,restartDate:restartMode==='date'?restartDate:'',
     poseRateSource,
@@ -716,21 +716,25 @@ function historyErrorMessage(error){
 }
 async function saveReportWithHistory(date,data){
   if(!canWrite()||syncing)return false;
-  if(!isConfigured()){toast('Non connecté à la base : rien n’a été enregistré.');return false;}
+  if(!isConfigured()){setReportSaveState(date,'failed','Reconnectez-vous à SIYO Pilot, puis réessayez.');alert('NON ENREGISTRÉ : aucune confirmation du serveur. Votre saisie reste sur cet appareil.');return false;}
   const pid=ACTIVE_PROJECT_ID,draft=readReportDraft(date),expected=draft?(draft.baseVersion||0):(DB_VERSIONS[date]||0),reason=reportRevisionReason();
   if(expected&&reason.length<8){alert('Expliquez la modification du rapport en 8 caractères au minimum.');document.getElementById('revision_reason')?.focus();return false;}
-  syncing=true;document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=true);
+  setReportSaveState(date,'sending');
+  const editorFields=[...document.querySelectorAll('#report-editor input,#report-editor select,#report-editor textarea,#report-editor button')].map(el=>[el,el.disabled]);
+  syncing=true;editorFields.forEach(([el])=>el.disabled=true);
   try{
-    await uploadReportFiles(fileContext(date),data,expected);
+    await reportRequestWithTimeout(()=>uploadReportFiles(fileContext(date),data,expected),45000);
     const pending=reportPendingRequest(date,data,expected,reason);
-    const result=await sb.rpc('siyo_save_report',{p_project_id:pid,p_report_date:date,p_expected_version:pending.expected,p_payload:pending.payload,p_reason:pending.reason,p_request_id:pending.requestId});
-    if(result.error)throw result.error;
-    const saved=result.data;
-    if(!saved||!Number.isInteger(saved.version)||saved.version<1||!saved.payload?.loc)throw new Error('Réponse serveur incomplète. Réessayez sans modifier la saisie.');
+    const saved=await sendReportConfirmed(pid,date,pending);
     if(pid===ACTIVE_PROJECT_ID){db[date]=saved.payload;DB_VERSIONS[date]=saved.version;online=true;lastSync=stamp();REPORT_HISTORY=null;}
-    clearPendingReport(date,pid);await finishReportFiles(fileContext(date));return true;
+    clearPendingReport(date,pid);await finishReportFiles(fileContext(date));
+    clearReportDraft(date);setReportSaveState(date,'saved','Confirmation serveur reçue · version '+saved.version+(saved.updated_at?' · '+historyTime(saved.updated_at):''));return true;
   }catch(error){
-    toast(historyErrorMessage(error)+' Votre brouillon est conservé.');
+    const conflict=['PT409','40001'].includes(error?.code)||/conflit|version.*chang/i.test(error?.message||'');
+    const uncertain=reportTransportError(error)||error?.code==='SIYO_ACK_MISMATCH';
+    if(uncertain)online=false;
+    setReportSaveState(date,conflict?'conflict':uncertain?'uncertain':'failed',historyErrorMessage(error),error?.code||'');
+    alert((uncertain?'ENREGISTREMENT NON CONFIRMÉ':'NON ENREGISTRÉ SUR LE SERVEUR')+'\n'+historyErrorMessage(error)+'\nVotre saisie reste sur cet appareil. '+(conflict?'Reprenez la version centrale et comparez les données avant de corriger.':'Réessayez l’enregistrement ; aucun succès n’est confirmé.'));
     if(pid===ACTIVE_PROJECT_ID&&date===SD&&V==='saisie'){
       if(/recréer un rapport supprimé/i.test(error?.message||'')&&!document.getElementById('revision_reason')){
         const slot=document.getElementById('report-reason-slot');
@@ -739,7 +743,7 @@ async function saveReportWithHistory(date,data){
       if(/motif|recréer|modification/i.test(error?.message||''))document.getElementById('revision_reason')?.focus();
     }
     return false;
-  }finally{fileBusy(false);syncing=false;document.querySelectorAll('#report-editor button').forEach(b=>b.disabled=false);}
+  }finally{fileBusy(false);syncing=false;editorFields.forEach(([el,disabled])=>el.disabled=disabled);refreshReportSaveNotice();}
 }
 async function deleteReportWithHistory(date,reason){
   if(!canWrite()||FILE_BUSY||syncing||CONFIG_SAVING)return false;
@@ -1646,7 +1650,7 @@ function pgLogin(){
     <button class="bp" id="login_btn" style="width:100%;margin-top:8px" onclick="login()">Se connecter</button></div></div>`;
 }
 
-function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderTimer=null;}dc();const a=document.getElementById('app');let h=hdr();if(syncing)h+=`<div class="sync-bar">🔄 Synchronisation...</div>`;
+function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderTimer=null;}dc();const a=document.getElementById('app');let h=hdr();h+=renderUnsentReportNotice();if(syncing)h+=`<div class="sync-bar">🔄 Synchronisation...</div>`;
   // 'home' et 'dg' pointent tous les deux vers la Synthèse (Accueil = Tableau de bord)
   if(V==='login')h+=pgLogin();else if(V==='projects')h+=pgProjects();else if(V==='home'||V==='dg')h+=pgDG();else if(V==='saisie'&&canWrite())h+=pgSaisie();else if(V==='rapport')h+=pgRapport();else if(V==='whatsapp')h+=pgWhatsapp();else if(V==='aleas')h+=pgAleas();else if(V==='attach'&&canAccessFinance())h+=pgAttachement();else if(V==='settings'&&canAccessProjectSetup())h+=pgParametrageProjet();else h+=pgDG();
   a.innerHTML=h;
@@ -1661,9 +1665,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.4</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.5</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.4</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.5</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2237,7 +2241,7 @@ async function saveReport(showReport){
   if(!confirmReportReview(data,messages))return false;
   data.validation=entryNotice(data).length?{status:'recorded',savedAt:new Date().toISOString(),savedBy:SESSION.user.id,method:'partial_entry'}:fieldReportValidation();
   const date=SD,ok=await syncSave(date,data);
-  if(ok){clearReportDraft(date);if(showReport)V='rapport';draw();toast(entryNotice(data).length?'Rapport enregistré — informations à compléter ou à confirmer':'Rapport enregistré dans la base centrale');}
+  if(ok){clearReportDraft(date);if(showReport)V='rapport';draw();toast('Confirmation serveur reçue : rapport enregistré dans la base centrale.');alert('RAPPORT ENREGISTRÉ SUR LE SERVEUR\nDate : '+fD(date)+' · Version '+DB_VERSIONS[date]+'\nLes données sont disponibles dans le rapport et le tableau de bord.');}
   return ok;
 }
 
@@ -2662,6 +2666,7 @@ function pgWhatsapp(){
 }
 
 async function copyWA(zone){
+  if(zone!=='weekly'&&readReportDraft(SD)){alert('La saisie de cette date n’est pas confirmée sur le serveur. Revenez à Saisie pour l’enregistrer ou reprendre la version centrale avant de partager.');return;}
   const el=document.getElementById('wa_'+zone);if(!el)return;
   try{if(!navigator.clipboard?.writeText)throw new Error('clipboard');await navigator.clipboard.writeText(el.textContent);toast('Texte copié');}
   catch(e){const r=document.createRange();r.selectNodeContents(el);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(r);let ok=false;try{ok=document.execCommand('copy');}catch(e){}if(ok){selection.removeAllRanges();toast('Texte copié');}else toast('Texte sélectionné : utilisez Copier dans le menu du navigateur.');}
@@ -3438,9 +3443,9 @@ function pgDG(){
       <span class="kb ${variationProduction<0?'br':variationProduction>0?'bg':'bo'}">${variationProduction>=0?'+':''}${fmt(variationProduction)} ml${variationProductionPct===null?'':` · ${variationProductionPct>=0?'+':''}${variationProductionPct.toFixed(1)}%`}</span>
     </div>
     <div class="kc" style="border-left:4px solid ${projectionColor}">
-      <div class="kl">${projection.civilPending?'Fin du réseau estimée':hasCivil()?'Fin du périmètre suivi':'Fin de chantier calculée'}</div>
+      <div class="kl">${projectionUsesGCAllowance()?'Fin estimée · réseau + GC':projection.civilPending?'Fin du réseau estimée':hasCivil()?'Fin du périmètre suivi':'Fin de chantier calculée'}</div>
       <div class="kv" style="font-size:18px;color:${projectionColor}">${projection.date?fD(projection.date):projection.networkDate?fD(projection.networkDate):'Non estimée'}</div>
-      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires · périmètre suivi':projection.civilPending?'Fin globale à compléter · voir les hypothèses GC':'Date de calcul non définie'}</div>
+      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires'+(projectionUsesGCAllowance()?' · dont 60 j de réserve GC':' · périmètre suivi'):projection.civilPending?'Fin globale à compléter · voir les hypothèses GC':'Date de calcul non définie'}</div>
       <span class="kb ${projection.date?'bbl':'bo'}">Cadence de projection : ${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}</span>
     </div>
   </div>`;
@@ -3475,7 +3480,7 @@ function pgDG(){
           <small>${poseObserved>0?`Référence réelle actuelle : ${fmt(poseObserved)} ml/j productif.`:'Référence réelle indisponible : repli provisoire sur le planning.'}</small>
         </div>
         <div class="projection-field"><label>Essais de pression (ml/j)</label><input class="fi" type="number" min="1" step="1" id="pilotageTestRate" value="${pilotage.testRate}"><small>Valeur initiale : 2 000 ml/j, à confirmer.</small></div>
-        <div class="projection-field"><label>Reste GC calculé (équivalent-regard)</label><input class="fi" type="number" min="0" step="0.1" id="pilotageGcRemaining" value="${projection.gcRemaining.toFixed(1)}" readonly><small>Calculé automatiquement d’après les étapes saisies pour chaque regard.</small></div>
+        <div class="projection-field" ${projectionUsesGCAllowance()?'style="display:none"':''}><label>Reste GC calculé (équivalent-regard)</label><input class="fi" type="number" min="0" step="0.1" id="pilotageGcRemaining" value="${projection.gcRemaining.toFixed(1)}" readonly><small>Calculé automatiquement d’après les étapes saisies pour chaque regard.</small></div>
         <div class="projection-field" ${hasCivil()?'style="display:none"':''}><label>Durée par regard (j/ouvrage)</label><input class="fi" type="number" min="0.1" step="0.1" id="pilotageGcDays" value="${pilotage.gcDaysPer}"></div>
         ${hasCivil()?`<div class="projection-field"><label>Jours travaillés par semaine</label><select class="fi" id="projectionWorkDays">${[5,6,7].map(n=>`<option value="${n}" ${pilotageCalc.workingDays===n?'selected':''}>${n} jours · ${n===5?'lundi–vendredi':n===6?'lundi–samedi':'tous les jours'}</option>`).join('')}</select><small>6 jours proposés pour Mitrelli, d’après le calendrier du PDF ; à confirmer.</small></div>
         <div class="projection-field"><label>Début de pause prévue (facultatif)</label><input class="fi" type="date" id="projectionPauseStart" value="${escHtml(pilotage.pauseStart||'')}"></div>
@@ -3486,8 +3491,8 @@ function pgDG(){
       </div>
       <div class="projection-result">
         <div><b>Reste calculé</b><span>${fmt(projection.restePose)} ml de pose · ${fmt(projection.resteEssais)} ml d’essais</span></div>
-        <div><b>Durées</b><span>Pose ${projection.poseDays??'—'} j · Essais ${projection.testDays??'—'} j${hasCivil()?' · GC détaillés ci-dessous':` · Regards ${projection.gcDays} j`}</span></div>
-        <div><b>Hypothèse d’enchaînement</b><span>${hasCivil()?'Pose → essais → raccordements → rinçage ; branches GC selon les débuts renseignés ; récolement après la dernière branche.':'Pose → essais → raccordements → rinçage ; regards en parallèle ; récolement en clôture.'}</span></div>
+        <div><b>Durées</b><span>Pose ${projection.poseDays??'—'} j · Essais ${projection.testDays??'—'} j${projectionUsesGCAllowance()?' · Réserve GC 60 j calendaires':hasCivil()?' · GC détaillés ci-dessous':` · Regards ${projection.gcDays} j`}</span></div>
+        <div><b>Hypothèse d’enchaînement</b><span>${projectionUsesGCAllowance()?'Pose → essais → raccordements → rinçage → réserve GC fixe de 60 jours calendaires → récolement.':hasCivil()?'Pose → essais → raccordements → rinçage ; branches GC selon les débuts renseignés ; récolement après la dernière branche.':'Pose → essais → raccordements → rinçage ; regards en parallèle ; récolement en clôture.'}</span></div>
         ${projection.requiredPoseRate!==null?`<div><b>Cadence pose nécessaire</b><span>${fmt(projection.requiredPoseRate)} ml/j${projection.requiredIncrease!==null?` · ${projection.requiredIncrease>0?'+':''}${projection.requiredIncrease.toFixed(1)}% vs cadence retenue`:''}</span></div>`:''}
         ${projection.targetImpossibleReason?`<div class="projection-warning"><b>${projection.civilPending?'Projection globale incomplète':'Cible impossible avec ces hypothèses'}</b><span>${projection.targetImpossibleReason}</span></div>`:''}
       </div>
@@ -3966,7 +3971,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.8.4 — GC complémentaires et saisie consolidée, 30/09/2026' ,
+      version_app:'2.8.5 — GC complémentaires et saisie consolidée, 30/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4585,16 +4590,16 @@ function readReportDraft(date=SD){
   try{const raw=JSON.parse(localStorage.getItem(key)||'null');return raw?.fields&&raw.date===date?raw:null;}catch(e){return null;}
 }
 function reportFields(){
-  const fields={};document.querySelectorAll('#report-editor input[id],#report-editor select[id],#report-editor textarea[id]').forEach(el=>{if(el.type!=='file'&&!el.id.startsWith('file_new_'))fields[el.id]=el.value;});return fields;
+  const fields={};document.querySelectorAll('#report-editor input[id],#report-editor select[id],#report-editor textarea[id]').forEach(el=>{if(el.type!=='file'&&!el.id.startsWith('file_new_'))fields[el.id]=el.id==='file_manifest'?(el.value||'[]'):el.value;});return fields;
 }
 function captureReportDraft(){
   if(V!=='saisie'||!document.getElementById('report-editor')||REPORT_FORM_DATE!==SD)return;
   const fields=reportFields();const signature=JSON.stringify({fields,indexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index)});if(signature===REPORT_FORM_BASELINE)return;
-  const old=readReportDraft(),draft={date:SD,baseVersion:old?old.baseVersion:REPORT_FORM_VERSION,fields,constraintIndexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index),updatedAt:new Date().toISOString()};
+  const old=readReportDraft(),draft={...old,date:SD,baseVersion:old?old.baseVersion:REPORT_FORM_VERSION,saveStatus:old?.saveStatus==='sending'?'sending':'unsent',saveMessage:'',saveCode:'',fields,constraintIndexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index),updatedAt:new Date().toISOString()};
   REPORT_DRAFT_MEMORY.set(reportDraftKey(),draft);
-  try{localStorage.setItem(reportDraftKey(),JSON.stringify(draft));}catch(e){toast('Stockage local indisponible : gardez cette page ouverte et exportez votre brouillon.');}
+  try{localStorage.setItem(reportDraftKey(),JSON.stringify(draft));}catch(e){toast('Stockage local indisponible : gardez cette page ouverte et exportez votre copie locale.');}
   REPORT_FORM_BASELINE=signature;
-  const status=document.getElementById('report-draft-status');if(status)status.textContent='Brouillon conservé sur cet appareil — pas encore envoyé à la base.';
+  REPORT_SAVE_RECEIPTS.delete(reportDraftKey());refreshReportSaveNotice();
 }
 function restoreReportDraft(){
   const draft=readReportDraft();
@@ -4606,15 +4611,12 @@ function restoreReportDraft(){
   REPORT_FORM_DATE=SD;REPORT_FORM_VERSION=draft?draft.baseVersion:(DB_VERSIONS[SD]||0);REPORT_FORM_BASELINE=JSON.stringify({fields:reportFields(),indexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index)});
 }
 function clearReportDraft(date=SD){REPORT_DRAFT_MEMORY.delete(reportDraftKey(date));try{localStorage.removeItem(reportDraftKey(date));}catch(e){}}
-function reportDraftNotice(){
-  const draft=readReportDraft(),conflict=draft&&(draft.baseVersion||0)!==(DB_VERSIONS[SD]||0);
-  return `<div class="saisie-note no-print"><b id="report-draft-status">${conflict?'Le rapport central a changé : votre brouillon est conservé, mais ne doit pas écraser cette nouvelle version.':draft?'Brouillon retrouvé sur cet appareil — pas encore envoyé à la base.':'Saisissez les quantités du jour, pas les cumuls. Un rapport commun regroupe tous les fronts à cette date.'}</b><div class="draft-actions"><button class="bs" onclick="exportReportDraft()">Exporter le brouillon</button><button class="bs" onclick="discardReportDraft()">Reprendre la version centrale</button></div></div>`;
-}
+function reportDraftNotice(){return '<div id="report-save-feedback">'+reportSaveNoticeHTML()+'</div>';}
 async function discardReportDraft(){
   if(FILE_BUSY||syncing)return;
   if(!confirm('Abandonner la saisie locale de cette date et reprendre le rapport enregistré ? Exportez d’abord votre brouillon si vous devez le conserver.'))return;
   try{await discardFileDraft();}catch(e){toast('Impossible de réinitialiser les pièces locales : '+e.message);return;}
-  clearReportDraft();await syncLoad();
+  clearReportDraft();clearPendingReport(SD);REPORT_SAVE_RECEIPTS.delete(reportDraftKey());await syncLoad();
 }
 function exportReportDraft(){
   captureReportDraft();const draft=readReportDraft();
@@ -4659,10 +4661,10 @@ if(document.addEventListener){
   document.addEventListener('input',event=>{if(event.target.closest?.('#report-editor'))captureReportDraft();});
   document.addEventListener('change',event=>{if(event.target.closest?.('#report-editor'))captureReportDraft();});
 }
-window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING){event.preventDefault();event.returnValue='';}});
+window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING||(V==='saisie'&&readReportDraft())){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.8.4
+// Pièces jointes privées — SIYO Pilot 2.8.5
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4749,7 +4751,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.4');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.5');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -5186,6 +5188,115 @@ function projectionGCResults(p){
 }
 
 
+// Mitrelli: one approved GC allowance, independent of individual quantities/progress.
+const MITRELLI_GC_ALLOWANCE_DAYS=60;
+function projectionUsesGCAllowance(){return ACTIVE_PROJECT_ID==='b1e9630e-5924-4cbc-996a-c35c122748e0';}
+const projectionWithDetailedGC=projectionCadences;
+projectionCadences=function(synth,raw){
+  if(!projectionUsesGCAllowance())return projectionWithDetailedGC(synth,raw);
+  const settings=projectionEffectiveSettings(raw),p=projectionBaseWithoutCivil(synth,settings);
+  p.baseDate=settings.restartMode==='date'?settings.restartDate:null;p.targetDate=settings.targetMode==='date'?settings.targetDate:null;
+  p.gcRows=[];p.missingGC=[];p.civilPending=false;p.gcAllowanceDays=MITRELLI_GC_ALLOWANCE_DAYS;p.gcDays=MITRELLI_GC_ALLOWANCE_DAYS;
+  p.networkDate=p.baseDate&&p.networkDays!==null?projectionWorkFinish(p.baseDate,p.networkDays,settings):null;
+  p.gcDate=p.networkDate?addCalendarDays(p.networkDate,MITRELLI_GC_ALLOWANCE_DAYS):null;
+  p.date=p.gcDate?(+settings.recoDays>0?projectionWorkFinish(addCalendarDays(p.gcDate,1),Math.ceil(settings.recoDays),settings):p.gcDate):null;
+  p.totalDays=p.date?calendarDiff(p.baseDate,p.date)+1:null;
+  p.deltaTarget=p.date&&p.targetDate?calendarDiff(p.targetDate,p.date):null;
+  p.requiredPoseRate=null;p.requiredIncrease=null;p.targetImpossibleReason='';
+  if(p.baseDate&&p.targetDate){
+    // Reserve the fixed GC calendar allowance first, then count available working days.
+    let gcDeadline=p.targetDate;
+    if(+settings.recoDays>0){
+      let remaining=Math.ceil(settings.recoDays),d=p.targetDate;
+      for(let n=0;n<36600;n++,d=weeklyShift(d,-1))if(projectionWorkingDay(d,settings)&&--remaining===0){gcDeadline=weeklyShift(d,-1);break;}
+    }
+    const networkDeadline=weeklyShift(gcDeadline,-MITRELLI_GC_ALLOWANCE_DAYS);
+    let available=0;
+    if(networkDeadline>=p.baseDate)for(let d=p.baseDate;d<=networkDeadline;d=weeklyShift(d,1))if(projectionWorkingDay(d,settings))available++;
+    const poseWindow=available-(p.testDays||0)-Math.ceil(settings.raccordDays)-Math.ceil(settings.rinseDays);
+    if(poseWindow<=0)p.targetImpossibleReason='La réserve GC de 60 jours et les opérations de fin ne laissent aucun délai disponible pour la pose.';
+    else{p.requiredPoseRate=p.restePose/poseWindow;p.requiredIncrease=p.poseRate>0?(p.requiredPoseRate/p.poseRate-1)*100:null;}
+  }
+  return p;
+};
+const renderDetailedProjectionGC=renderProjectionGC;
+renderProjectionGC=function(settings){return projectionUsesGCAllowance()?`<div class="projection-gc"><h3>Réserve pour l’ensemble des travaux GC : 60 jours calendaires</h3><p>Ajoutée après la fin estimée du réseau pour achever l’ensemble des GC du projet, y compris clôtures, locaux et ouvrages annexes. Cette réserve reste fixe : elle n’est pas réduite automatiquement selon les quantités réalisées.</p></div>`:renderDetailedProjectionGC(settings);};
+const readDetailedProjectionGC=readProjectionGC;
+readProjectionGC=function(settings){return projectionUsesGCAllowance()?settings.gcProjection:readDetailedProjectionGC(settings);};
+const detailedProjectionGCResults=projectionGCResults;
+projectionGCResults=function(p){return projectionUsesGCAllowance()?`<div class="projection-gc-results"><b>Fin estimée du projet</b><p>Réseau : ${p.networkDate?fD(p.networkDate):'Date non estimée'} · Réserve GC : 60 jours calendaires · ${p.date?'Fin estimée : '+fD(p.date):'Fin non estimée'}</p><p>Réseau = pose, essais, raccordements et rinçage. Les plans de récolement sont ajoutés en clôture si une durée est renseignée.</p></div>`:detailedProjectionGCResults(p);};
+
+// A local safety copy never constitutes confirmation from the central database.
+const REPORT_SAVE_RECEIPTS=new Map();
+function reportSaveState(date=SD){
+  const draft=readReportDraft(date);
+  if(draft)return {status:draft.saveStatus==='sending'&&!syncing?'uncertain':draft.saveStatus||'unsent',message:draft.saveMessage||'',code:draft.saveCode||''};
+  return REPORT_SAVE_RECEIPTS.get(reportDraftKey(date))||{status:'idle',message:''};
+}
+function setReportSaveState(date,status,message='',code=''){
+  if(status==='saved')REPORT_SAVE_RECEIPTS.set(reportDraftKey(date),{status,message});
+  else{
+    const prior=readReportDraft(date),draft={...(prior||{date,baseVersion:DB_VERSIONS[date]||0,fields:date===SD?reportFields():{},constraintIndexes:[]}),saveStatus:status,saveMessage:message,saveCode:code,updatedAt:new Date().toISOString()};
+    REPORT_DRAFT_MEMORY.set(reportDraftKey(date),draft);
+    try{localStorage.setItem(reportDraftKey(date),JSON.stringify(draft));}catch(e){}
+    REPORT_SAVE_RECEIPTS.delete(reportDraftKey(date));
+  }
+  refreshReportSaveNotice();
+}
+function reportSaveNoticeHTML(){
+  const state=reportSaveState(),draft=readReportDraft(),conflict=draft&&(draft.baseVersion||0)!==(DB_VERSIONS[SD]||0);
+  const pending=draft||['sending','failed','uncertain','conflict','unsent'].includes(state.status);
+  const sending=state.status==='sending',saved=!pending&&(state.status==='saved'||!!DB_VERSIONS[SD]);
+  const title=sending?'Enregistrement en cours — attendez la confirmation':conflict||state.status==='conflict'?'Non enregistré : le rapport central a changé':state.status==='uncertain'?'Enregistrement non confirmé par le serveur':state.status==='failed'?'Échec de l’enregistrement sur le serveur':pending?'Non enregistré sur le serveur':saved?'Rapport enregistré sur le serveur':'Prêt à saisir';
+  const detail=sending?'La saisie sera confirmée seulement après la réponse du serveur.':pending?'Votre saisie est conservée uniquement sur cet appareil. Les rapports et le tableau de bord affichent la dernière version centrale.':saved?(state.message||'Version centrale v'+DB_VERSIONS[SD]+'.'):'Saisissez les quantités du jour, puis cliquez sur Enregistrer.';
+  return `<section class="report-save-notice report-save--${sending?'sending':pending?'pending':saved?'saved':'idle'} no-print" role="${pending&&!sending?'alert':'status'}" aria-live="polite"><b id="report-draft-status">${escHtml(title)}</b><p>${escHtml(detail)}</p>${state.message&&pending?`<p>${escHtml(state.message)}</p>`:''}${pending&&!sending?`<div class="draft-actions">${!conflict&&state.status!=='conflict'?'<button type="button" class="bp" onclick="save()">Réessayer l’enregistrement</button>':''}<button type="button" class="bs" onclick="exportReportDraft()">Exporter la copie locale</button><button type="button" class="bs" onclick="discardReportDraft()">Reprendre la version centrale</button></div>`:''}</section>`;
+}
+function refreshReportSaveNotice(){
+  const el=document.getElementById('report-save-feedback');if(el)el.innerHTML=reportSaveNoticeHTML();
+}
+function renderUnsentReportNotice(){
+  if(!canWrite()||!['home','dg','rapport','whatsapp'].includes(V))return '';
+  let dates=[SD];
+  if(V==='home'||V==='dg'){
+    const prefix=reportDraftKey('');
+    const keys=new Set(REPORT_DRAFT_MEMORY.keys());
+    try{for(let i=0;i<localStorage.length;i++)keys.add(localStorage.key(i));}catch(e){}
+    dates=[...keys].filter(k=>k?.startsWith(prefix)).map(k=>k.slice(prefix.length)).filter(weeklyValidDate).sort();
+  }
+  const unsent=dates.filter(d=>!!readReportDraft(d));if(!unsent.length)return '';
+  return `<div class="mn no-print"><section class="report-save-notice report-save--pending" role="alert"><b>Saisie non confirmée sur cet appareil</b><p>${unsent.map(d=>escHtml(fD(d))).join(' · ')}. Les données affichées proviennent de la base centrale et ne comprennent pas cette saisie locale.</p><button class="bp" onclick="resumeUnsentReport('${unsent.at(-1)}')">Revenir à la saisie</button></section></div>`;
+}
+function resumeUnsentReport(date){if(!weeklyValidDate(date)||syncing||FILE_BUSY)return;SD=date;go('saisie');}
+function reportTransportError(error){
+  if(error?.code&&error.code!=='SIYO_TIMEOUT'&&error.code!=='SIYO_ACK_INCOMPLETE')return false;
+  return ['SIYO_TIMEOUT','SIYO_ACK_INCOMPLETE'].includes(error?.code)||error?.name==='TypeError'||error?.name==='AbortError'||/fetch|network|réseau|connexion|connection|offline|timeout|timed out|interrompu/i.test(error?.message||'');
+}
+async function reportRequestWithTimeout(factory,ms=20000){
+  const controller=new AbortController();let timer;
+  try{return await Promise.race([Promise.resolve().then(()=>factory(controller.signal)),new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Object.assign(new Error('Le serveur n’a pas confirmé l’enregistrement dans le délai attendu.'),{code:'SIYO_TIMEOUT'}));},ms);})]);}
+  finally{clearTimeout(timer);}
+}
+async function sendReportConfirmed(pid,date,pending){
+  // Retry exactly the same idempotent request; a conflict/permission error is never retried.
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      const result=await reportRequestWithTimeout(signal=>{
+        const q=sb.rpc('siyo_save_report',{p_project_id:pid,p_report_date:date,p_expected_version:pending.expected,p_payload:pending.payload,p_reason:pending.reason,p_request_id:pending.requestId});
+        return typeof q.abortSignal==='function'?q.abortSignal(signal):q;
+      });
+      if(result?.error)throw result.error;
+      const saved=result?.data;
+      if(!saved||!Number.isInteger(saved.version)||saved.version!==pending.expected+1||!saved.payload?.loc)throw Object.assign(new Error('Réponse serveur incomplète.'),{code:'SIYO_ACK_INCOMPLETE'});
+      if(stableReportJSON(saved.payload)!==stableReportJSON(pending.payload))throw Object.assign(new Error('Le contenu confirmé par le serveur ne correspond pas à la saisie envoyée. Contactez la direction.'),{code:'SIYO_ACK_MISMATCH'});
+      return saved;
+    }catch(error){
+      if(attempt===0&&reportTransportError(error)){setReportSaveState(date,'sending','Connexion interrompue : nouvelle tentative en cours (2/2).');continue;}
+      throw error;
+    }
+  }
+}
+window.resumeUnsentReport=resumeUnsentReport;
+
 init().catch(e=>{V='login';draw();toast('Connexion impossible : '+(e.message||e));});
 </script>
 <style>
@@ -5474,6 +5585,8 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .civil-front{padding:16px 0;border-top:1px solid #e2e8f0}.civil-front h3{font-size:15px;margin:0 0 12px}.civil-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.civil-card{display:flex;flex-direction:column;gap:10px;background:#f7fafc;border:1px solid #dbe6ed;border-radius:10px;padding:15px;min-width:0;overflow-wrap:anywhere}.civil-card label{display:flex;flex-direction:column;gap:5px;font-size:12px}.civil-card small{font-size:12px;color:#526175;line-height:1.5}.civil-card .fi{width:100%;min-width:0}.civil-tag{font-size:11px;color:#0b7285;font-weight:600}.civil-add{display:flex;gap:10px;align-items:center;margin-top:12px}.civil-add .fi{max-width:220px}.civil-state{display:grid;grid-template-columns:1fr auto;gap:6px;border-top:1px solid #dbe6ed;padding-top:10px}.civil-state small{grid-column:1/-1}.civil-period strong{font-size:18px;color:#0b7285}.civil-summary{margin-top:16px}@media(max-width:600px){.civil-grid{grid-template-columns:1fr}.civil-add{align-items:stretch;flex-direction:column}.civil-add .fi{max-width:none}}@media print{.civil-card{break-inside:avoid}.civil-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .projection-gc{margin-top:18px;border-top:1px solid #dbe6ed;padding-top:16px}.projection-gc h3{font-size:15px}.projection-gc p,.projection-gc-results p{font-size:12px;line-height:1.6;color:#526175}.projection-gc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.projection-gc-card{background:#f7fafc;border:1px solid #dbe6ed;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:anywhere}.projection-gc-card label{font-size:12px;display:flex;flex-direction:column;gap:5px}.projection-gc-card .fi{width:100%;min-width:0}.projection-gc-card small{font-size:11px;color:#526175;line-height:1.5}.projection-gc-results{background:#edf5fc;padding:14px;margin-top:14px;border-radius:10px}@media(max-width:600px){.projection-gc-grid{grid-template-columns:1fr}}
+
+.report-save-notice{border:1px solid #cbd5e1;border-left:5px solid #64748b;border-radius:10px;padding:14px 16px;margin:0 0 16px;background:#f8fafc;line-height:1.5;overflow-wrap:anywhere}.report-save-notice b{display:block;font-size:15px}.report-save-notice p{font-size:12px;margin:6px 0}.report-save--pending{border-color:#ef4444;background:#fff1f2;color:#991b1b}.report-save--saved{border-color:#16a34a;background:#f0fdf4;color:#166534}.report-save--sending{border-color:#2563eb;background:#eff6ff;color:#1e40af}.report-save-notice .draft-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}@media(max-width:600px){.report-save-notice .draft-actions button{width:100%;min-height:44px}.report-save-notice{padding:12px}}
 </style>
 </body>
 </html>
