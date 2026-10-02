@@ -289,8 +289,8 @@ const PILOTAGE_SETTINGS_KEY='__pilotage__';
 const PILOTAGE_LOCAL_KEY='siyo_dispersion1b_pilotage';
 const CADENCE_POSE_PLANNING=186; // ml/j : médiane arrondie des rythmes des fronts Oumé du planning de fin
 const PILOTAGE_DEFAULTS={
-  targetMode:'undefined',targetDate:'',
-  restartMode:'undefined',restartDate:'',
+  targetMode:'planning',targetDate:'',
+  restartMode:'data',restartDate:'',
   poseRateSource:'data',manualPoseRate:CADENCE_POSE_PLANNING,
   testRate:2000,              // ml/j : un tronçon d'essai usuel de 2 km
   gcDaysPer:3.5,gcRemaining:14,
@@ -306,8 +306,8 @@ function normalizePilotageSettings(raw){
   const migrated={...PILOTAGE_DEFAULTS,...src};
   if(!src.targetMode&&src.mode)migrated.targetMode=src.mode;
   if(!src.targetDate&&src.date)migrated.targetDate=src.date;
-  if(!['date','undefined'].includes(migrated.targetMode))migrated.targetMode='undefined';
-  if(!['date','undefined'].includes(migrated.restartMode))migrated.restartMode='undefined';
+  if(!['date','undefined','planning'].includes(migrated.targetMode))migrated.targetMode='undefined';
+  if(!['date','undefined','data'].includes(migrated.restartMode))migrated.restartMode='undefined';
   if(!['data','planning','manual'].includes(migrated.poseRateSource))migrated.poseRateSource='data';
   return migrated;
 }
@@ -353,17 +353,25 @@ async function savePilotageSettings(){
     toast('La reprise est postérieure à l’échéance : la cible est déjà impossible.');
   }
   const previous=getPilotageSettings();
+  let gcProjection,workingDays,pauseStart,pauseEnd;
+  try{
+    gcProjection=readProjectionGC(previous);
+    workingDays=hasCivil()?Number(document.getElementById('projectionWorkDays')?.value||7):previous.workingDays;
+    pauseStart=document.getElementById('projectionPauseStart')?.value||'';
+    pauseEnd=document.getElementById('projectionPauseEnd')?.value||'';
+    if((pauseStart||pauseEnd)&&(!projectionDateValid(pauseStart)||!projectionDateValid(pauseEnd)||pauseEnd<pauseStart))throw Error('Renseignez les deux dates de pause dans l’ordre chronologique.');
+  }catch(err){toast(err.message);return;}
   const history=Array.isArray(previous.history)?[...previous.history]:[];
   if(previous.updatedAt)history.push({...previous,history:undefined,remplaceLe:new Date().toISOString()});
   const settings={
-    ...PILOTAGE_DEFAULTS,...numeric,
+    ...previous,...numeric,gcProjection,workingDays,pauseStart,pauseEnd,
     targetMode,targetDate:targetMode==='date'?targetDate:'',
     restartMode,restartDate:restartMode==='date'?restartDate:'',
     poseRateSource,
     updatedAt:new Date().toISOString(),
     history:history.slice(-20)
   };
-  await syncSave(PILOTAGE_SETTINGS_KEY,{pilotage:settings,dt:PILOTAGE_SETTINGS_KEY});
+  if(!await syncSave(PILOTAGE_SETTINGS_KEY,{pilotage:settings,dt:PILOTAGE_SETTINGS_KEY}))return;
   toast('Paramètres de projection enregistrés et partagés.');
   draw();
 }
@@ -1653,9 +1661,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.3</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.4</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.3</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.4</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
       ${SESSION?`<div class="sync-status user-chip" title="${escHtml(PROFILE?.email||'')}"><span class="role-dot role-${escHtml(currentRole())}"></span>${escHtml(PROFILE?.full_name||PROFILE?.email||'')}${V==='projects'?(isAdminUser()?' · Administrateur SIYO':''):' · '+escHtml(CURRENT_USER_CONTEXT.label)}<button class="sync-btn" onclick="logout()" title="Déconnexion">⏻</button></div>`:''}
@@ -2683,6 +2691,7 @@ function groupByMonth(){
 // pas la performance théorique d'une équipe isolée.
 function cadencePoseObservee(limit=20){
   const valeurs=dbDates().sort().map(d=>{
+    if(db[d]?.kind==='correction')return 0;
     let total=0;LOC.forEach(l=>{total+=Math.max(0,dayTot(db[d],l.id).r);});return total;
   }).filter(v=>v>0).slice(-limit).sort((a,b)=>a-b);
   if(!valeurs.length)return 0;
@@ -3346,31 +3355,32 @@ function pgDG(){
   // ── 1bis. Pilotage de l'achèvement du réseau ──
   const pilotage=getPilotageSettings();
   const projection=projectionCadences(synth,pilotage);
+  const pilotageCalc=projectionEffectiveSettings(pilotage);
 
   // Le statut compare d'abord la date calculée à la cible. Sans reprise connue,
   // il se limite au constat calendaire et ne prétend pas valider une trajectoire.
   let echeanceColor='#8a95a5',echeanceValeur='Non estimé',echeanceDetail='Échéance cible non définie';
   const contractDeadline=contractPlanningDeadline();
   let echeanceBadge=contractDeadline?'Échéance du planning actif : '+fD(contractDeadline):'Échéance contractuelle non renseignée',echeanceBadgeClass='bo';
-  if(pilotage.targetMode==='date'&&pilotage.targetDate){
+  if(pilotageCalc.targetMode==='date'&&pilotageCalc.targetDate){
     if(projection.date&&projection.deltaTarget!==null){
       const retard=projection.deltaTarget;
       if(retard>0){
         echeanceColor='#e74c3c';echeanceValeur='+'+retard+' j';
-        echeanceDetail='fin calculée le '+fD(projection.date)+' · cible '+fD(pilotage.targetDate);
+        echeanceDetail='fin calculée le '+fD(projection.date)+' · cible '+fD(pilotageCalc.targetDate);
         echeanceBadge='Retard projeté · accélération requise';echeanceBadgeClass='br';
       }else{
         const marge=Math.abs(retard);
         echeanceColor='#36b37e';echeanceValeur=marge+' j';
         echeanceDetail='de marge · fin calculée le '+fD(projection.date);
-        echeanceBadge='Compatible avec la cible du '+fD(pilotage.targetDate);echeanceBadgeClass='bg';
+        echeanceBadge='Compatible avec la cible du '+fD(pilotageCalc.targetDate);echeanceBadgeClass='bg';
       }
     }else{
-      const joursAvant=calendarDiff(today(),pilotage.targetDate);
+      const joursAvant=calendarDiff(today(),pilotageCalc.targetDate);
       echeanceValeur=joursAvant>0?joursAvant+' j':joursAvant===0?'Aujourd’hui':Math.abs(joursAvant)+' j';
-      echeanceDetail=joursAvant>0?'avant la cible du '+fD(pilotage.targetDate):joursAvant===0?'cible atteinte · projet non achevé':'de dépassement · cible '+fD(pilotage.targetDate);
+      echeanceDetail=joursAvant>0?'avant la cible du '+fD(pilotageCalc.targetDate):joursAvant===0?'cible atteinte · projet non achevé':'de dépassement · cible '+fD(pilotageCalc.targetDate);
       echeanceColor=joursAvant>0?'#f5a623':'#e74c3c';
-      echeanceBadge=pilotage.restartMode==='undefined'?'Projection suspendue · reprise non définie':'Cadences à compléter';
+      echeanceBadge=pilotageCalc.restartMode==='undefined'?'Projection suspendue · reprise non définie':projection.civilPending?'Hypothèses GC à compléter':'Cadences à compléter';
       echeanceBadgeClass=joursAvant>0?'bo':'br';
     }
   }
@@ -3405,7 +3415,7 @@ function pgDG(){
   const productionColor=variationProduction<0?'#e74c3c':variationProduction>0?'#36b37e':'#5a6778';
   const poseObserved=cadencePoseObservee();
   const poseSourceLabel=pilotage.poseRateSource==='planning'?'planning de fin':pilotage.poseRateSource==='manual'?'saisie manuelle':poseObserved>0?'médiane · jusqu’à 20 jours avec pose':'planning par défaut · données indisponibles';
-  const projectionColor=projection.date?(projection.deltaTarget>0?'#e74c3c':'#36b37e'):'#8a95a5';
+  const projectionColor=projection.date?(projection.deltaTarget>0?'#e74c3c':'#36b37e'):projection.networkDate?'#2c7be5':'#8a95a5';
 
   h+=`<div class="st">Pilotage & projection</div>`;
   h+=`<div class="kr" style="margin-bottom:16px">
@@ -3428,9 +3438,9 @@ function pgDG(){
       <span class="kb ${variationProduction<0?'br':variationProduction>0?'bg':'bo'}">${variationProduction>=0?'+':''}${fmt(variationProduction)} ml${variationProductionPct===null?'':` · ${variationProductionPct>=0?'+':''}${variationProductionPct.toFixed(1)}%`}</span>
     </div>
     <div class="kc" style="border-left:4px solid ${projectionColor}">
-      <div class="kl">Fin de chantier calculée</div>
-      <div class="kv" style="font-size:18px;color:${projectionColor}">${projection.date?fD(projection.date):'Non estimée'}</div>
-      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires après la reprise':projection.civilPending?'Durées des GC complémentaires à définir avant une projection globale':'Date de reprise non définie'}</div>
+      <div class="kl">${projection.civilPending?'Fin du réseau estimée':hasCivil()?'Fin du périmètre suivi':'Fin de chantier calculée'}</div>
+      <div class="kv" style="font-size:18px;color:${projectionColor}">${projection.date?fD(projection.date):projection.networkDate?fD(projection.networkDate):'Non estimée'}</div>
+      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires · périmètre suivi':projection.civilPending?'Fin globale à compléter · voir les hypothèses GC':'Date de calcul non définie'}</div>
       <span class="kb ${projection.date?'bbl':'bo'}">Cadence de projection : ${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}</span>
     </div>
   </div>`;
@@ -3441,13 +3451,15 @@ function pgDG(){
       <div class="projection-config-grid">
         <div class="projection-field"><label>Échéance cible</label>
           <select class="fi" id="pilotageTargetMode" onchange="togglePilotageInput(this,'pilotageTargetDate')">
+            <option value="planning" ${pilotage.targetMode==='planning'?'selected':''}>Échéance du planning actif</option>
             <option value="undefined" ${pilotage.targetMode==='undefined'?'selected':''}>Non définie</option>
             <option value="date" ${pilotage.targetMode==='date'?'selected':''}>Définir une date</option>
           </select>
           <input class="fi" type="date" id="pilotageTargetDate" value="${pilotage.targetDate||''}" style="display:${pilotage.targetMode==='date'?'block':'none'}">
         </div>
-        <div class="projection-field"><label>Date de reprise</label>
+        <div class="projection-field"><label>Date de calcul / reprise</label>
           <select class="fi" id="pilotageRestartMode" onchange="togglePilotageInput(this,'pilotageRestartDate')">
+            <option value="data" ${pilotage.restartMode==='data'?'selected':''}>Lendemain du dernier rapport</option>
             <option value="undefined" ${pilotage.restartMode==='undefined'?'selected':''}>Non définie — chantier suspendu</option>
             <option value="date" ${pilotage.restartMode==='date'?'selected':''}>Simuler une reprise</option>
           </select>
@@ -3464,19 +3476,24 @@ function pgDG(){
         </div>
         <div class="projection-field"><label>Essais de pression (ml/j)</label><input class="fi" type="number" min="1" step="1" id="pilotageTestRate" value="${pilotage.testRate}"><small>Valeur initiale : 2 000 ml/j, à confirmer.</small></div>
         <div class="projection-field"><label>Reste GC calculé (équivalent-regard)</label><input class="fi" type="number" min="0" step="0.1" id="pilotageGcRemaining" value="${projection.gcRemaining.toFixed(1)}" readonly><small>Calculé automatiquement d’après les étapes saisies pour chaque regard.</small></div>
-        <div class="projection-field"><label>Durée par regard (j/ouvrage)</label><input class="fi" type="number" min="0.1" step="0.1" id="pilotageGcDays" value="${pilotage.gcDaysPer}"></div>
+        <div class="projection-field" ${hasCivil()?'style="display:none"':''}><label>Durée par regard (j/ouvrage)</label><input class="fi" type="number" min="0.1" step="0.1" id="pilotageGcDays" value="${pilotage.gcDaysPer}"></div>
+        ${hasCivil()?`<div class="projection-field"><label>Jours travaillés par semaine</label><select class="fi" id="projectionWorkDays">${[5,6,7].map(n=>`<option value="${n}" ${pilotageCalc.workingDays===n?'selected':''}>${n} jours · ${n===5?'lundi–vendredi':n===6?'lundi–samedi':'tous les jours'}</option>`).join('')}</select><small>6 jours proposés pour Mitrelli, d’après le calendrier du PDF ; à confirmer.</small></div>
+        <div class="projection-field"><label>Début de pause prévue (facultatif)</label><input class="fi" type="date" id="projectionPauseStart" value="${escHtml(pilotage.pauseStart||'')}"></div>
+        <div class="projection-field"><label>Fin de pause prévue (incluse)</label><input class="fi" type="date" id="projectionPauseEnd" value="${escHtml(pilotage.pauseEnd||'')}"><small>Aucun jour férié ni arrêt de fin d’année déduit automatiquement.</small></div>`:''}
         <div class="projection-field"><label>Piquages / raccordements (jours)</label><input class="fi" type="number" min="0" step="1" id="pilotageRaccordDays" value="${pilotage.raccordDays}"></div>
         <div class="projection-field"><label>Rinçage-désinfection (jours)</label><input class="fi" type="number" min="0" step="1" id="pilotageRinseDays" value="${pilotage.rinseDays}"></div>
         <div class="projection-field"><label>Plans de récolement (jours)</label><input class="fi" type="number" min="0" step="1" id="pilotageRecoDays" value="${pilotage.recoDays}"><small>0 signifie : non intégré au calcul.</small></div>
       </div>
       <div class="projection-result">
         <div><b>Reste calculé</b><span>${fmt(projection.restePose)} ml de pose · ${fmt(projection.resteEssais)} ml d’essais</span></div>
-        <div><b>Durées</b><span>Pose ${projection.poseDays??'—'} j · Essais ${projection.testDays??'—'} j · Regards ${projection.gcDays} j</span></div>
-        <div><b>Hypothèse d’enchaînement</b><span>Pose → essais → raccordements → rinçage ; regards en parallèle ; récolement en clôture.</span></div>
+        <div><b>Durées</b><span>Pose ${projection.poseDays??'—'} j · Essais ${projection.testDays??'—'} j${hasCivil()?' · GC détaillés ci-dessous':` · Regards ${projection.gcDays} j`}</span></div>
+        <div><b>Hypothèse d’enchaînement</b><span>${hasCivil()?'Pose → essais → raccordements → rinçage ; branches GC selon les débuts renseignés ; récolement après la dernière branche.':'Pose → essais → raccordements → rinçage ; regards en parallèle ; récolement en clôture.'}</span></div>
         ${projection.requiredPoseRate!==null?`<div><b>Cadence pose nécessaire</b><span>${fmt(projection.requiredPoseRate)} ml/j${projection.requiredIncrease!==null?` · ${projection.requiredIncrease>0?'+':''}${projection.requiredIncrease.toFixed(1)}% vs cadence retenue`:''}</span></div>`:''}
-        ${projection.targetImpossibleReason?`<div class="projection-warning"><b>Cible impossible avec ces hypothèses</b><span>${projection.targetImpossibleReason}</span></div>`:''}
+        ${projection.targetImpossibleReason?`<div class="projection-warning"><b>${projection.civilPending?'Projection globale incomplète':'Cible impossible avec ces hypothèses'}</b><span>${projection.targetImpossibleReason}</span></div>`:''}
       </div>
-      <div class="projection-actions"><button class="bp" onclick="savePilotageSettings()">Enregistrer et recalculer</button><span>Calcul en jours calendaires. Les valeurs restent des hypothèses de pilotage, pas un engagement contractuel.</span></div>
+      ${renderProjectionGC(pilotage)}
+      ${projectionGCResults(projection)}
+      <div class="projection-actions"><button class="bp" onclick="savePilotageSettings()">Enregistrer et recalculer</button><span>${hasCivil()?'Calendrier de travail ci-dessus ; durées restantes estimées à confirmer.':'Calcul en jours calendaires.'} Hypothèses de pilotage, pas un engagement contractuel.</span></div>
     </div>
   </details>`;
 
@@ -3949,7 +3966,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.8.3 — GC complémentaires et saisie consolidée, 30/09/2026' ,
+      version_app:'2.8.4 — GC complémentaires et saisie consolidée, 30/09/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4645,7 +4662,7 @@ if(document.addEventListener){
 window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.8.3
+// Pièces jointes privées — SIYO Pilot 2.8.4
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4732,7 +4749,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.3');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.4');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -5037,6 +5054,138 @@ renderParamWorks=function(cfg){
 Object.assign(window,{civilDraftPhase,prepareMitreviDraft});
 
 
+// Projection GC : références du planning séparées des quantités et des pondérations.
+function projectionGCWorks(cu=cumul(dbDates().sort().at(-1)||today())){
+  const rows=[];
+  for(const l of LOC){
+    const c=cu[l.id]||{};
+    if(l.regards>0)rows.push({key:l.id+'::regards',locality:l.nm,name:'Regards de visite',kind:'regards',planned:l.regards,progress:Math.min(1,Math.max(0,(c.gcProgress||0)/l.regards))});
+    for(const w of civilWorks(l))rows.push({key:l.id+'::'+w.id,locality:l.nm,name:w.name,kind:w.kind,planned:w.planned,progress:civilIsStaged(w)?civilProgress(w,c.civil?.[w.id]):Math.min(1,Math.max(0,(+c.civil?.[w.id]||0)/(w.planned||1)))});
+  }
+  return rows;
+}
+function projectionGCReference(row){
+  const mitrelli=ACTIVE_PROJECT_ID==='b1e9630e-5924-4cbc-996a-c35c122748e0';
+  if(!mitrelli)return null;
+  const site=String(row.locality).toLowerCase();
+  const bonguera=site==='bonguera'||site==='bonguéra',kondossou=site==='kondossou';
+  if(!bonguera&&!kondossou)return null;
+  // Seuls les regards de refoulement correspondent aux quantités actuelles.
+  if(row.kind==='regards'&&row.planned===(bonguera?3:2))return {days:bonguera?14:7,source:'Planning Mitrelli V02 · tâche '+(bonguera?12:37)+' · '+row.planned+' regards'};
+  if(row.kind==='cloture'&&row.planned===1&&/ch[aâ]teau/i.test(row.name))return {days:15,source:'Planning Mitrelli V02 · tâche '+(bonguera?23:48)+' · clôture du château'};
+  return null;
+}
+function projectionGCSettings(row,settings){
+  const saved=settings.gcProjection?.[row.key],reference=projectionGCReference(row);
+  const duration=saved&&Object.prototype.hasOwnProperty.call(saved,'duration')?saved.duration:reference?.days??null;
+  const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>0&&n<=10000?n:null;
+  return {duration:valid(duration),remaining:valid(saved?.remaining),
+    startMode:['date','parallel','network'].includes(saved?.startMode)?saved.startMode:'date',
+    startDate:projectionDateValid(saved?.startDate)?saved.startDate:'',source:String(saved?.source||reference?.source||'Hypothèse à renseigner')};
+}
+function projectionDateValid(value){return /^\d{4}-\d{2}-\d{2}$/.test(value||'')&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;}
+function projectionWorkingDay(date,settings){
+  const week=+settings.workingDays||7,day=new Date(date+'T00:00:00Z').getUTCDay();
+  if(week===6&&day===0||week===5&&(day===0||day===6))return false;
+  return !(settings.pauseStart&&settings.pauseEnd&&date>=settings.pauseStart&&date<=settings.pauseEnd);
+}
+// Fin inclusive : une journée de travail termine le jour de début, pas le lendemain.
+function projectionWorkFinish(start,days,settings){
+  if(!projectionDateValid(start)||!Number.isFinite(days)||days<0)return null;
+  if(days===0)return start;
+  let date=start,remaining=Math.ceil(days);
+  for(let n=0;n<36600;n++,date=addCalendarDays(date,1)){
+    if(projectionWorkingDay(date,settings)&&--remaining===0)return date;
+  }
+  return null;
+}
+function projectionEffectiveSettings(raw){
+  const p={...raw};
+  p.workingDays=[5,6,7].includes(+raw.workingDays)?+raw.workingDays:(ACTIVE_PROJECT_ID==='b1e9630e-5924-4cbc-996a-c35c122748e0'?6:7);
+  if(raw.targetMode==='planning'){p.targetDate=contractPlanningDeadline();p.targetMode=p.targetDate?'date':'undefined';}
+  if(raw.restartMode==='data'){
+    const last=dbDates().sort().at(-1);p.restartDate=last?addCalendarDays(last,1):'';
+    p.restartMode=p.restartDate?'date':'undefined';
+  }
+  return p;
+}
+function renderProjectionGC(settings){
+  if(!hasCivil())return '';
+  const rows=projectionGCWorks();
+  return `<div class="projection-gc"><h3>Planning des ouvrages GC</h3>
+    <p>Durées en jours travaillés, pour l’ensemble du poste sur chaque front. Les postes sont supposés disposer de moyens indépendants ; ajustez leur début si les équipes sont partagées. Une date de début est nécessaire pour reprendre l’enchaînement du planning.</p>
+    <div class="projection-gc-grid">${rows.map((row,i)=>{const p=projectionGCSettings(row,settings),done=row.progress>=1;
+      return `<div class="projection-gc-card"><b>${escHtml(row.locality)} · ${escHtml(row.name)}</b><small>Avancement : ${(row.progress*100).toFixed(1)} %${done?' · Achevé':''}</small>
+        <small>${escHtml(p.source)}</small>
+        <label>Durée totale du poste (j travaillés)<input class="fi" type="number" min="0.1" step="0.1" id="projectionGcDuration_${i}" value="${p.duration??''}" placeholder="À renseigner" ${done?'disabled':''}></label>
+        <label>Durée restante confirmée (facultatif)<input class="fi" type="number" min="0.1" step="0.1" id="projectionGcRemaining_${i}" value="${p.remaining??''}" placeholder="Estimation depuis l’avancement" ${done?'disabled':''}></label>
+        <label>Enchaînement<select class="fi" id="projectionGcStartMode_${i}" ${done?'disabled':''}>
+          <option value="date" ${p.startMode==='date'?'selected':''}>Début prévu à renseigner</option>
+          <option value="parallel" ${p.startMode==='parallel'?'selected':''}>En parallèle, dès la date de calcul</option>
+          <option value="network" ${p.startMode==='network'?'selected':''}>Après la fin du réseau</option>
+        </select></label>
+        <label>Début prévu<input class="fi" type="date" id="projectionGcStartDate_${i}" value="${escHtml(p.startDate)}" ${done?'disabled':''}></label>
+      </div>`;}).join('')}</div>
+    <p>Sans durée restante confirmée : durée restante ≈ durée totale × part non réalisée. La pondération physique des étapes n’est pas une mesure de leur durée ; cette approximation est à vérifier avec le conducteur. Les dates du PDF initial n’ont pas été recopiées après le décalage du démarrage à septembre.</p>
+  </div>`;
+}
+function readProjectionGC(settings){
+  const saved={...(settings.gcProjection||{})};
+  if(!hasCivil())return saved;
+  projectionGCWorks().forEach((row,i)=>{
+    if(row.progress>=1)return;
+    const optional=(id,label)=>{const raw=document.getElementById(id)?.value??'';if(raw==='')return null;const n=Number(raw);if(!Number.isFinite(n)||n<=0||n>10000)throw Error(label+' : renseignez une durée supérieure à zéro et au plus 10 000 jours.');return n;};
+    const prior=projectionGCSettings(row,settings),duration=optional('projectionGcDuration_'+i,row.name),remaining=optional('projectionGcRemaining_'+i,row.name);
+    const startMode=document.getElementById('projectionGcStartMode_'+i)?.value||'date';
+    const startDate=document.getElementById('projectionGcStartDate_'+i)?.value||'';
+    if(startDate&&!projectionDateValid(startDate))throw Error('Date de début GC invalide.');
+    saved[row.key]={duration,remaining,startMode,startDate,
+      source:duration===prior.duration?prior.source:'Hypothèse de conduite du projet'};
+  });
+  return saved;
+}
+const projectionBaseWithoutCivil=projectionCadencesBeforeCivil;
+projectionCadences=function(synth,raw){
+  const settings=projectionEffectiveSettings(raw),p=projectionBaseWithoutCivil(synth,settings);
+  p.baseDate=settings.restartDate||null;p.targetDate=settings.targetDate||null;
+  p.networkDate=null;p.gcRows=[];p.missingGC=[];p.civilPending=false;
+  // Les projets sans GC complémentaires conservent l’enchaînement historique.
+  if(!hasCivil())return p;
+  p.networkDate=p.baseDate&&p.networkDays!==null?projectionWorkFinish(p.baseDate,p.networkDays,settings):null;
+  const cu=cumul(dbDates().sort().at(-1)||today());
+  for(const row of projectionGCWorks(cu)){
+    const config=projectionGCSettings(row,raw),remaining=config.remaining??(config.duration===null?null:config.duration*(1-row.progress));
+    let start=p.baseDate;
+    if(config.startMode==='date')start=config.startDate&&p.baseDate?(config.startDate>p.baseDate?config.startDate:p.baseDate):null;
+    if(config.startMode==='network')start=p.networkDate?addCalendarDays(p.networkDate,1):null;
+    const complete=row.progress>=1,finish=complete?p.baseDate:(start&&remaining!==null?projectionWorkFinish(start,remaining,settings):null);
+    const missing=complete?'':remaining===null?'durée à renseigner':!start?'début à renseigner':!finish?'calendrier à vérifier':'';
+    p.gcRows.push({...row,...config,remaining:complete?0:remaining,start,finish,missing,approximate:!complete&&config.remaining===null});
+    if(missing)p.missingGC.push(row.locality+' / '+row.name+' : '+missing);
+  }
+  p.gcDate=p.gcRows.every(r=>!r.missing)?p.gcRows.map(r=>r.finish).filter(Boolean).sort().at(-1)||p.baseDate:null;
+  p.civilPending=p.missingGC.length>0;
+  p.date=null;p.totalDays=null;p.deltaTarget=null;
+  if(p.networkDate&&p.gcDate&&!p.civilPending){
+    const worksEnd=p.networkDate>p.gcDate?p.networkDate:p.gcDate;
+    p.date=+settings.recoDays>0?projectionWorkFinish(addCalendarDays(worksEnd,1),Math.ceil(settings.recoDays),settings):worksEnd;
+    p.totalDays=calendarDiff(p.baseDate,p.date)+1;
+    if(p.targetDate)p.deltaTarget=calendarDiff(p.targetDate,p.date);
+  }
+  // La cible et la date ne doivent pas annoncer une cadence suffisante si une branche GC reste inconnue.
+  p.requiredPoseRate=null;p.requiredIncrease=null;p.targetImpossibleReason='';
+  if(p.civilPending)p.targetImpossibleReason='Comparaison globale incomplète : hypothèses GC à compléter.';
+  else if(p.gcDate&&p.targetDate&&p.gcDate>p.targetDate)p.targetImpossibleReason='La branche GC dépasse déjà l’échéance cible.';
+  return p;
+};
+function projectionGCResults(p){
+  if(!hasCivil())return '';
+  return `<div class="projection-gc-results"><b>Projection par branche</b><p>Réseau : ${p.networkDate?fD(p.networkDate):'Date de calcul à définir'} · GC : ${p.gcDate?fD(p.gcDate):'Hypothèses à compléter'}</p>
+    ${p.gcRows.map(row=>`<p>${escHtml(row.locality)} / ${escHtml(row.name)} : ${row.progress>=1?'achevé':row.missing?escHtml(row.missing):`${Math.ceil(row.remaining)} j travaillés restants${row.approximate?' (estimation)':''} · fin ${fD(row.finish)}`}</p>`).join('')}
+    <p>Projection limitée au périmètre suivi dans SIYO Pilot. Les plateformes, locaux de désinfection et autres prestations du PDF non configurées dans le projet ne sont pas incluses.</p></div>`;
+}
+
+
 init().catch(e=>{V='login';draw();toast('Connexion impossible : '+(e.message||e));});
 </script>
 <style>
@@ -5323,6 +5472,8 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 .entry-report-notice{border-left:4px solid #f5a623;background:#fffaf0;font-size:12px}.entry-report-notice p{margin:4px 0}
 
 .civil-front{padding:16px 0;border-top:1px solid #e2e8f0}.civil-front h3{font-size:15px;margin:0 0 12px}.civil-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.civil-card{display:flex;flex-direction:column;gap:10px;background:#f7fafc;border:1px solid #dbe6ed;border-radius:10px;padding:15px;min-width:0;overflow-wrap:anywhere}.civil-card label{display:flex;flex-direction:column;gap:5px;font-size:12px}.civil-card small{font-size:12px;color:#526175;line-height:1.5}.civil-card .fi{width:100%;min-width:0}.civil-tag{font-size:11px;color:#0b7285;font-weight:600}.civil-add{display:flex;gap:10px;align-items:center;margin-top:12px}.civil-add .fi{max-width:220px}.civil-state{display:grid;grid-template-columns:1fr auto;gap:6px;border-top:1px solid #dbe6ed;padding-top:10px}.civil-state small{grid-column:1/-1}.civil-period strong{font-size:18px;color:#0b7285}.civil-summary{margin-top:16px}@media(max-width:600px){.civil-grid{grid-template-columns:1fr}.civil-add{align-items:stretch;flex-direction:column}.civil-add .fi{max-width:none}}@media print{.civil-card{break-inside:avoid}.civil-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.projection-gc{margin-top:18px;border-top:1px solid #dbe6ed;padding-top:16px}.projection-gc h3{font-size:15px}.projection-gc p,.projection-gc-results p{font-size:12px;line-height:1.6;color:#526175}.projection-gc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.projection-gc-card{background:#f7fafc;border:1px solid #dbe6ed;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:anywhere}.projection-gc-card label{font-size:12px;display:flex;flex-direction:column;gap:5px}.projection-gc-card .fi{width:100%;min-width:0}.projection-gc-card small{font-size:11px;color:#526175;line-height:1.5}.projection-gc-results{background:#edf5fc;padding:14px;margin-top:14px;border-radius:10px}@media(max-width:600px){.projection-gc-grid{grid-template-columns:1fr}}
 </style>
 </body>
 </html>
