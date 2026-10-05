@@ -28,7 +28,8 @@
 .file-add{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}.file-add label:last-child{grid-column:1/-1}.file-add label{font-size:12px;font-weight:600}.file-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #e2e8f0}.file-row b,.file-row span,.file-row small{display:block;overflow-wrap:anywhere;margin:4px 0}.file-row span,.file-row small{font-size:12px;color:#64748b}.file-row>div:first-child{min-width:0}.file-actions{display:flex;gap:8px;flex-wrap:wrap}.file-row label{display:block;margin-bottom:5px}.file-busy-overlay{position:fixed;inset:0;z-index:99999;background:#102238e8;color:white;display:flex;align-items:center;justify-content:center;padding:30px;font-size:18px;text-align:center}.file-dialog{border:0;border-radius:12px;max-width:750px;width:90%;padding:24px}.file-dialog::backdrop{background:#102238bb}.pdf-report-export{width:1060px;background:#fff;color:#111;padding:8px;box-sizing:border-box}.pdf-report-export .mn{max-width:none;width:auto;padding:0;margin:0}.pdf-report-export .cd{padding:10px;margin-bottom:8px;box-shadow:none}.pdf-report-export .kc{padding:8px}.pdf-report-export .kv{font-size:19px}.pdf-report-export .tb{font-size:10px}.pdf-report-export .tb th,.pdf-report-export .tb td{padding:4px}.pdf-report-export .report-kpi-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.pdf-report-export .report-production-strip{grid-template-columns:repeat(3,1fr)}.pdf-report-export .no-print{display:none!important}.pdf-report-brand{font-weight:700;font-size:16px;padding-bottom:12px;color:#173451}.pdf-report-export .tw{overflow:visible}.pdf-report-export tr{break-inside:avoid}.pdf-report-export h2,.pdf-report-export h3,.pdf-report-export .ct{break-after:avoid}
 @media(max-width:600px){.file-add{grid-template-columns:1fr}.file-row{flex-direction:column;align-items:stretch}.file-actions .bs{flex:1}}
 @media print{.file-busy-overlay,.file-dialog{display:none!important}}
-</style></head>
+</style><style id="activity-label-style">.activity-label-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.activity-label-grid label{display:grid;gap:5px;font-size:12px}.activity-label-grid .fi{width:100%;min-width:0}.activity-designations p{font-size:12px;color:#64748b;line-height:1.5}.activity-designations>.fi{max-width:100%}@media(max-width:700px){.activity-label-grid{grid-template-columns:1fr}}</style>
+</head>
 <body>
 <div id="siyo-pwa-offline" role="status" aria-live="polite" hidden>Connexion Internet interrompue. Une saisie reste sur cet appareil tant que le serveur n’a pas confirmé son enregistrement. Réessayez après le retour de la connexion.</div>
 <div id="app"></div>
@@ -137,7 +138,7 @@ function renderMaterialCumulative(zone,locs,cu){
   return h+`<tr><td><b>Total ${escHtml(locs.length===1?locs[0].nm:zone)}</b></td><td>${fmt(s.tP)}</td>${weld?`<td>${cell(s.totals.soud,s.pehdPlanned)}</td>`:''}<td>${cell(s.totals.fou,s.tP)}</td><td>${cell(s.totals.rem,s.tP)}</td><td>${cell(s.totals.ess,s.tP)}</td></tr></tbody></table></div></div>`;
 }
 function exportMaterialCumul(){
-  const cu=cumul('9999-12-31'),weld=weldingVisible(),rows=[[projectName()],['Cumuls saisis — '+fD(today())],[],['Front','Zone','Sous-tronçon','Matériau','DN','Prévu (ml)','Bardage (ml)',...(weld?['Soudure PEHD (ml)']:[]),'Fouille (ml)','Pose (ml)','Essais (ml)']];
+  const cu=cumul('9999-12-31'),weld=weldingVisible(),rows=[[projectName()],['Cumuls saisis — '+fD(today())],[],['Front','Zone','Sous-tronçon','Matériau','DN','Prévu (ml)',activityName('bardage','Bardage')+' (ml)',...(weld?['Soudure PEHD (ml)']:[]),'Fouille (ml)','Pose (ml)','Essais (ml)']];
   for(const l of LOC)for(const z of l.zones)for(const [dn,p] of Object.entries(z.dn)){
     const d=cu[l.id]?.zones?.[z.zid]?.dn?.[dn]||{};
     rows.push([l.nm,l.z,z.nm,zoneMaterial(z),+dn,p,+d.bar||0,...(weld?[weldedZone(z)?(+d.s||0):'N/A']:[]),+d.f||0,+d.r||0,+d.ess||0]);
@@ -817,7 +818,7 @@ function historyDiff(before,after,includeMeta=false){
   visit(before,after,[]);return changes;
 }
 function historyFieldLabel(path){
-  const labels={entryStatus:'État de saisie par localité',loc:'Terrain',zones:'Tronçon',s:'Soudure (ml)',f:'Fouille (ml)',r:'Pose (ml)',ess:'Essais (ml)',barDay:'Bardage du jour (ml)',bar:'Bardage cumulé (ml)',topoDay:'Implantation du jour (ml)',roadAreaDay:'Ouverture de voie (m²)',imp:'Implantation cumulée',gc:'Ancien cumul GC',eff:'Effectifs',finitions:'Finitions',regards:'Regards',stage:'Étape',gcMeta:'Observation GC',rincage:'Rinçage',recolement:'Récolement',contraintes:'Contraintes',rmq:'Remarques',mobilisation:'Mobilisation',rate:'Taux (%)',correctionReason:'Motif de correction des quantités',kind:'Nature de la saisie',validation:'Métadonnées de validation',logistique:'Logistique',note:'Observation',reference:'Référence',p:'Observation terrain'};
+  const labels={entryStatus:'État de saisie par localité',loc:'Terrain',zones:'Tronçon',s:'Soudure (ml)',f:'Fouille (ml)',r:'Pose (ml)',ess:'Essais (ml)',barDay:activityName('bardage','Bardage')+' du jour (ml)',bar:activityName('bardage','Bardage')+' cumulé (ml)',topoDay:'Implantation du jour (ml)',roadAreaDay:'Ouverture de voie (m²)',imp:'Implantation cumulée',gc:'Ancien cumul GC',eff:'Effectifs',finitions:'Finitions',regards:'Regards',stage:'Étape',gcMeta:'Observation GC',rincage:'Rinçage',recolement:'Récolement',contraintes:'Contraintes',rmq:'Remarques',mobilisation:'Mobilisation',rate:'Taux (%)',correctionReason:'Motif de correction des quantités',kind:'Nature de la saisie',validation:'Métadonnées de validation',logistique:'Logistique',note:'Observation',reference:'Référence',p:'Observation terrain'};
   const l=path[0]==='loc'?LOC.find(l=>l.id===path[1]):null;
   return path.map((k,i)=>{if(l&&i===1)return l.nm;if(l&&path[i-1]==='zones')return l.zones.find(z=>z.zid===k)?.nm||k;if(l&&i===4&&path[2]==='zones')return 'DN '+k;if(path[0]==='eff'&&i===2)return {f:'Fouilleurs',s:'Soudeurs',n:'Observation'}[k]||k;return labels[k]||LOC.find(l=>l.id===k)?.nm||k;}).join(' · ');
 }
@@ -990,7 +991,7 @@ function contrainteRowHtml(index,c={}){
     ${hasLegacyHours?`<div class="constraint-duration-warning">Ancienne durée enregistrée en heures (${fmt(c.dureeHeures)} h) : renseignez la durée réelle en jours, sans conversion automatique.</div>`:''}
     <div class="constraint-grid constraint-grid--main">
       <div class="fr"><label class="fl">Localité</label><select class="fi" id="ct_loc_${index}"><option value="tous">Ensemble du chantier</option>${LOC.map(l=>`<option value="${l.id}" ${c.localite===l.id?'selected':''}>${l.nm}</option>`).join('')}</select></div>
-      <div class="fr"><label class="fl">Activité touchée</label><select class="fi" id="ct_act_${index}">${optionList(CONTRAINTE_ACTIVITES,c.activite,'— Sélectionner —')}</select></div>
+      <div class="fr"><label class="fl">Activité touchée</label><select class="fi" id="ct_act_${index}">${optionList(constraintActivityLabels(),c.activite,'— Sélectionner —')}</select></div>
       <div class="fr"><label class="fl">Effet constaté</label><select class="fi" id="ct_eff_${index}">${optionList(CONTRAINTE_EFFETS,c.effet,'— Sélectionner —')}</select></div>
       <div class="fr"><label class="fl">Durée (jours)</label><input class="fi" type="number" min="1" step="1" id="ct_days_${index}" value="${durationDays||''}" placeholder="Ex. 3"></div>
       <div class="fr"><label class="fl">Statut</label><select class="fi" id="ct_stat_${index}">${optionList(CONTRAINTE_STATUTS,c.statut||'ponctuelle')}</select></div>
@@ -1228,8 +1229,8 @@ function reportDailyActivities(report,locs,date=SD){
   for(const l of locs){
     const entry=report?.loc?.[l.id]||{};
     const topo=entry.topoDay!==undefined?(+entry.topoDay||0):entry.imp!==undefined?Math.max(0,(+entry.imp||0)*l.tot-(before[l.id]?.topoMl||0)):0;
-    if(topo)add(l,'Implantation topo',fmt(topo)+' ml');
-    if(entry.roadAreaDay)add(l,'Ouverture de voie',fmtArea(entry.roadAreaDay)+' m²');
+    if(topo)add(l,activityName('topographie','Implantation topo'),fmt(topo)+' ml');
+    if(entry.roadAreaDay)add(l,activityName('ouverture_voie','Ouverture de voie'),fmtArea(entry.roadAreaDay)+' m²');
     const daily=dayDN(report,l.id);
     for(const z of l.zones)for(const dn of Object.keys(z.dn)){
       const d=entry.zones?.[z.zid]?.[dn]||{},key=pipeDailyKey(z,dn);
@@ -1241,7 +1242,7 @@ function reportDailyActivities(report,locs,date=SD){
     }
     for(const key of Object.keys(daily).sort((a,b)=>+pipeNumber(a)-+pipeNumber(b)||a.localeCompare(b))){
       const d=daily[key];
-      for(const [k,label] of [['bar','Bardage'],['s','Soudure'],['f','Fouille'],['r','Pose'],['ess','Essai']])
+      for(const [k,label] of [['bar',activityName('bardage','Bardage')],['s',activityName('assemblage','Soudure')],['f',activityName('ouverture','Fouille')],['r',activityName('fermeture','Pose')],['ess',activityName('essais','Essai')]])
         if(d[k])add(l,label,pipeLabel(key)+' · '+fmt(d[k])+' ml');
     }
     if((entry.p||'').trim())add(l,'Pièces et raccords',entry.p.trim());
@@ -1685,9 +1686,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.9</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.0</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.8.9</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.0</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button>
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
@@ -1705,6 +1706,59 @@ function statusSelectOptions(map,selected){
 function cloneProjectConfig(v){return JSON.parse(JSON.stringify(v));}
 function activeProjectParamConfig(){return PARAM_DRAFT||PROJECT_CONFIG;}
 function projectConfigTotal(cfg=activeProjectParamConfig()){return(cfg.localities||[]).reduce((s,l)=>s+(l.zones||[]).reduce((zs,z)=>zs+Object.values(z.dn||{}).reduce((a,v)=>a+(+v||0),0),0),0);}
+// Project designations change presentation only; stored activity keys stay stable.
+const ACTIVITY_DESIGNATIONS={topographie:'Implantation topo',bardage:'Bardage',assemblage:'Soudure',ouverture:'Fouille',fermeture:'Pose',gc:'Regards / ouvrages GC',essais:'Essais conformes',rincage:'Rinçage-désinfection',recolement:'Plans de récolement',ouverture_voie:'Ouverture de voie'};
+function preparationMode(cfg=PROJECT_CONFIG){return cfg.preparationMode==='approvisionnement'?'approvisionnement':'bardage';}
+function activityName(key,fallback='',cfg=PROJECT_CONFIG){
+  const custom=Object.hasOwn(cfg.activityLabels||{},key)?cfg.activityLabels[key]:'';
+  if(custom&&String(custom).trim())return cleanText(custom,80).replace(/[\r\n]+/g,' ');
+  if(key==='bardage'&&preparationMode(cfg)==='approvisionnement')return 'Approvisionnement en conduites';
+  return fallback||ACTIVITY_DESIGNATIONS[key]||key;
+}
+function preparationInstruction(cfg=PROJECT_CONFIG){
+  return preparationMode(cfg)==='approvisionnement'?
+    'Saisissez les conduites effectivement livrées ce jour, en ml, par site et DN. Ne ressaisissez pas un cumul ni un déplacement entre sites comme une nouvelle livraison.':
+    'Saisissez les conduites réparties ce jour le long du tracé, en ml, par site et DN. Ne ressaisissez pas un cumul.';
+}
+function constraintActivityLabels(){
+  const aliases={implantation:'topographie',ouverture_voie:'ouverture_voie',bardage:'bardage',assemblage:'assemblage',fouille:'ouverture',pose:'fermeture',essais:'essais',gc:'gc',rincage:'rincage',recolement:'recolement'};
+  return Object.fromEntries(Object.entries(CONTRAINTE_ACTIVITES).map(([key,label])=>[key,aliases[key]?activityName(aliases[key],label):label]));
+}
+function projectDraftActivityLabel(key,value){
+  if(!canAccessProjectSetup()||!PARAM_DRAFT||!Object.hasOwn(ACTIVITY_DESIGNATIONS,key))return;
+  PARAM_DRAFT.activityLabels=PARAM_DRAFT.activityLabels||{};
+  const label=cleanText(value,80).replace(/[\r\n]+/g,' ');
+  if(label)PARAM_DRAFT.activityLabels[key]=label;else delete PARAM_DRAFT.activityLabels[key];
+  saveProjectDraft();
+}
+function projectDraftPreparationMode(value){
+  if(!canAccessProjectSetup()||!PARAM_DRAFT||!['bardage','approvisionnement'].includes(value))return;
+  if(value===preparationMode(PARAM_DRAFT))return;
+  PARAM_DRAFT.preparationMode=value;
+  if(PARAM_DRAFT.activityLabels)delete PARAM_DRAFT.activityLabels.bardage;
+  saveProjectDraft();draw();
+}
+function hasPreparationQuantities(){
+  if(PROJECT_CONFIG.migration?.legacyPreparationFrozen&&Object.keys(PROJECT_CONFIG.initial?.bardage||{}).length)return true;
+  return dbDates().some(date=>Object.values(db[date]?.loc||{}).some(l=>Object.values(l.zones||{}).some(z=>Object.values(z).some(d=>(+d.barDay||0)!==0||(+d.bar||0)!==0))));
+}
+function renderActivityDesignations(cfg){
+  const editing=!!PARAM_DRAFT;
+  const mode=preparationMode(cfg);
+  return `<div class="cd activity-designations"><div class="ct">Désignations des activités</div>
+    <p>Les désignations sont propres au projet. Les unités, les données enregistrées et les calculs restent les mêmes.</p>
+    <label class="fl" for="preparation_mode">Opération suivie pour la préparation des conduites</label>
+    <select class="fi" id="preparation_mode" ${editing?'':'disabled'} onchange="projectDraftPreparationMode(this.value)">
+      <option value="bardage" ${mode==='bardage'?'selected':''}>Bardage — conduites réparties le long du tracé</option>
+      <option value="approvisionnement" ${mode==='approvisionnement'?'selected':''}>Approvisionnement — conduites livrées sur le site</option>
+    </select><p>${escHtml(preparationInstruction(cfg))}</p>
+    <p>Cette opération conserve la pondération du poste de préparation des conduites : ${+cfg.weights.bardage||0} %. Une livraison ne constitue pas une pose.</p>
+    <div class="activity-label-grid">${Object.entries(ACTIVITY_DESIGNATIONS).map(([key,label])=>`<label><span>${escHtml(key==='bardage'?(mode==='approvisionnement'?'Approvisionnement':'Bardage'):label)}</span><input class="fi" maxlength="80" value="${escHtml(activityName(key,'',cfg))}" placeholder="${escHtml(key==='bardage'&&mode==='approvisionnement'?'Approvisionnement en conduites':label)}" ${editing?'':'disabled'} oninput="projectDraftActivityLabel('${key}',this.value)"></label>`).join('')}</div>
+    <p>Un intitulé vide reprend la désignation par défaut. Si des quantités de préparation sont déjà enregistrées, le passage Bardage ↔ Approvisionnement nécessite une reprise explicite de l’historique ; cette révision simple est alors bloquée.</p>
+  </div>`;
+}
+window.projectDraftActivityLabel=projectDraftActivityLabel;
+window.projectDraftPreparationMode=projectDraftPreparationMode;
 function normalizeProjectConfig(cfg){
   (cfg.localities||[]).forEach(l=>{(l.zones||[]).forEach(z=>{z.tot=Object.values(z.dn||{}).reduce((s,v)=>s+(+v||0),0);});l.tot=(l.zones||[]).reduce((s,z)=>s+(+z.tot||0),0);l.regards=Math.max(0,Math.round(+l.regards||0));});
   cfg.weights=cfg.weights||{...DEFAULT_PHYSICAL_WEIGHTS};delete cfg.weights.mobilisation;cfg.initial=cfg.initial||{date:''};cfg.migration=cfg.migration||{legacyPreparationFrozen:false,rinsedLocalities:[]};
@@ -1761,6 +1815,9 @@ function projectConfigErrors(cfg){
   if(!(cfg.localities||[]).length)errors.push('Au moins une localité ou un front est requis.');
   (cfg.localities||[]).forEach(l=>{if(ids.has(l.id))errors.push(`Identifiant dupliqué : ${l.id}.`);ids.add(l.id);if(!l.nm?.trim()||!l.z?.trim())errors.push(`Localité incomplète : ${l.id}.`);if(!(l.zones||[]).length)errors.push(`${l.nm} ne contient aucun tronçon.`);(l.zones||[]).forEach(z=>{if(!Object.keys(z.dn||{}).length)errors.push(`${l.nm} / ${z.nm||z.zid} : aucun DN.`);Object.entries(z.dn||{}).forEach(([dn,v])=>{if(+v<0)errors.push(`${l.nm} / DN ${dn} : linéaire négatif.`);});});});
   if(!Number.isFinite(weightTotal)||Object.values(cfg.weights||{}).some(v=>!Number.isFinite(+v)||+v<0)||Math.abs(weightTotal-100)>.01)errors.push(`La pondération physique totalise ${weightTotal.toFixed(2)} % au lieu de 100 %.`);
+  if(cfg.preparationMode!==undefined&&!['bardage','approvisionnement'].includes(cfg.preparationMode))errors.push('Opération de préparation des conduites invalide.');
+  if(preparationMode(cfg)!==preparationMode(PROJECT_CONFIG)&&hasPreparationQuantities())errors.push('Des quantités de préparation sont déjà enregistrées. Le passage Bardage / Approvisionnement exige une reprise explicite de leur historique.');
+  for(const [key,value] of Object.entries(cfg.activityLabels||{}))if(!Object.hasOwn(ACTIVITY_DESIGNATIONS,key)||typeof value!=='string'||value.length>80||/[<>\r\n]/.test(value))errors.push('Désignation d’activité invalide : '+key);
   const plan=activePlanningVersion(cfg),rows=[...(plan?.rows||[])].sort((a,b)=>a.month.localeCompare(b.month));
   if(cfg.planning?.mode==='manual'||rows.length){
     if(!rows.length)errors.push('Le planning global doit contenir au moins un mois.');
@@ -1828,15 +1885,15 @@ function renderParamNetwork(cfg){
   return`<div class="cd"><div class="param-section-head"><div><div class="ct">Structure du réseau</div><span>Les linéaires des zones, des fronts et du projet sont calculés automatiquement depuis les DN.</span></div><div class="param-total"><small>Total projet</small><b>${fmt(projectConfigTotal(cfg))} ml</b></div></div><div class="param-network-layout">${list}${detail}</div><div class="saisie-note">Un front ou une zone déjà utilisé par un rapport reste verrouillé. Les nouveaux éléments créés dans la révision peuvent être supprimés avant validation.</div></div>`;
 }
 function renderParamWorks(cfg){
-  return`<div class="param-two-col"><div class="cd"><div class="ct">Regards de visite</div><div class="param-regard-list">${cfg.localities.map(l=>`<label><span>${escHtml(l.nm)}</span>${PARAM_DRAFT?`<input type="number" min="0" step="1" value="${l.regards||0}" onchange="projectDraftLocality('${l.id}','regards',this.value,'number')">`:`<b>${l.regards||'N/A'}</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Jalons de clôture</div><div class="param-readonly-list"><div><b>Essais de pression</b><span>Suivi en linéaire validé</span></div><div><b>Rinçage-désinfection</b><span>Validation par localité</span></div><div><b>Plans de récolement</b><span>Validation par localité</span></div></div><div class="saisie-note">Les pourcentages intermédiaires des regards restent calculés en interne à partir des états terrain.</div></div></div>`;
+  return`<div class="param-two-col"><div class="cd"><div class="ct">Regards de visite</div><div class="param-regard-list">${cfg.localities.map(l=>`<label><span>${escHtml(l.nm)}</span>${PARAM_DRAFT?`<input type="number" min="0" step="1" value="${l.regards||0}" onchange="projectDraftLocality('${l.id}','regards',this.value,'number')">`:`<b>${l.regards||'N/A'}</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Jalons de clôture</div><div class="param-readonly-list"><div><b>Essais de pression</b><span>Suivi en linéaire validé</span></div><div><b>${escHtml(activityName('rincage','Rinçage-désinfection'))}</b><span>Validation par localité</span></div><div><b>${escHtml(activityName('recolement','Plans de récolement'))}</b><span>Validation par localité</span></div></div><div class="saisie-note">Les pourcentages intermédiaires des regards restent calculés en interne à partir des états terrain.</div></div></div>`;
 }
 function renderParamRules(cfg){
   if(materialTracking(cfg)){
     const labels={topographie:'Implantation topo',bardage:'Bardage',assemblage:'Soudure préalable',ouverture:'Fouille',fermeture:'Pose, remblai compris',gc:'Regards',essais:'Essais conformes',rincage:'Rinçage-désinfection'},pvc=physicalWeightsFor('PVC',cfg.weights);
-    return `<div class="cd"><div class="ct">Pondération physique par matériau</div><p>Le PVC est emboîté pendant la pose. Le poids de la soudure préalable est transféré à la pose PVC. Les regards sont comptés une seule fois.</p><table class="tb"><thead><tr><th>Activité</th><th>PEHD (%)</th><th>PVC (%)</th></tr></thead><tbody>${Object.entries(labels).map(([k,label])=>`<tr><td>${label}</td><td>${PARAM_DRAFT?`<input class="fi" type="number" min="0" max="100" step="0.0001" value="${cfg.weights[k]}" onchange="projectDraftWeight('${k}',this.value)">`:(+cfg.weights[k]).toFixed(4)}</td><td>${k==='assemblage'?'Non applicable':pvc[k].toFixed(4)}</td></tr>`).join('')}<tr><td>Total</td><td>${Object.values(cfg.weights).reduce((a,b)=>a+(+b||0),0).toFixed(4)}</td><td>${Object.values(pvc).reduce((a,b)=>a+(+b||0),0).toFixed(4)}</td></tr></tbody></table><p>Grille de transition issue de Dispersion ; indice physique distinct du taux financier. Sans regards, les poids applicables sont renormalisés à 100 %.</p><div class="ct">Grille des regards</div>${Object.values(GC_STAGES).map(v=>`<p>${v.label} : ${Math.round(v.progress*100)} %</p>`).join('')}</div>`;
+    return `<div class="cd"><div class="ct">Pondération physique par matériau</div><p>Le PVC est emboîté pendant la pose. Le poids de la soudure préalable est transféré à la pose PVC. Les regards sont comptés une seule fois.</p><table class="tb"><thead><tr><th>Activité</th><th>PEHD (%)</th><th>PVC (%)</th></tr></thead><tbody>${Object.entries(labels).map(([k,label])=>`<tr><td>${escHtml(activityName(k,label,cfg))}</td><td>${PARAM_DRAFT?`<input class="fi" type="number" min="0" max="100" step="0.0001" value="${cfg.weights[k]}" onchange="projectDraftWeight('${k}',this.value)">`:(+cfg.weights[k]).toFixed(4)}</td><td>${k==='assemblage'?'Non applicable':pvc[k].toFixed(4)}</td></tr>`).join('')}<tr><td>Total</td><td>${Object.values(cfg.weights).reduce((a,b)=>a+(+b||0),0).toFixed(4)}</td><td>${Object.values(pvc).reduce((a,b)=>a+(+b||0),0).toFixed(4)}</td></tr></tbody></table><p>Grille de transition issue de Dispersion ; indice physique distinct du taux financier. Sans regards, les poids applicables sont renormalisés à 100 %.</p><div class="ct">Grille des regards</div>${Object.values(GC_STAGES).map(v=>`<p>${v.label} : ${Math.round(v.progress*100)} %</p>`).join('')}</div>`;
   }
   const labels={topographie:'Implantation topo',bardage:'Bardage',assemblage:'Assemblage / soudure',ouverture:'Fouille',fermeture:'Conduite posée',gc:'Ouvrages GC',essais:'Essais conformes',rincage:'Rinçage-désinfection'},total=Object.values(cfg.weights).reduce((s,v)=>s+(+v||0),0);
-  return`<div class="param-two-col"><div class="cd"><div class="param-section-head"><div><div class="ct">Pondération physique interne</div><span>Visible uniquement par le Chef de projet.</span></div><span class="kb ${Math.abs(total-100)<.01?'bg':'br'}">Total ${total.toFixed(2)} %</span></div><div class="param-weight-list">${Object.entries(labels).map(([k,l])=>`<label><span>${l}</span>${PARAM_DRAFT?`<input type="number" min="0" step="0.01" value="${cfg.weights[k]||0}" onchange="projectDraftWeight('${k}',this.value)">`:`<b>${(+cfg.weights[k]||0).toFixed(2)} %</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Grille interne des regards</div><div class="param-readonly-list">${Object.values(GC_STAGES).map(s=>`<div><b>${s.label}</b><span>${Math.round(s.progress*100)} % du regard</span></div>`).join('')}</div><div class="saisie-note">Cette grille n’est pas affichée dans le tableau de bord public ; elle reste consultable ici pour rendre le calcul auditable.</div></div></div>`;
+  return`<div class="param-two-col"><div class="cd"><div class="param-section-head"><div><div class="ct">Pondération physique interne</div><span>Visible uniquement par le Chef de projet.</span></div><span class="kb ${Math.abs(total-100)<.01?'bg':'br'}">Total ${total.toFixed(2)} %</span></div><div class="param-weight-list">${Object.entries(labels).map(([k,l])=>`<label><span>${escHtml(activityName(k,l,cfg))}</span>${PARAM_DRAFT?`<input type="number" min="0" step="0.01" value="${cfg.weights[k]||0}" onchange="projectDraftWeight('${k}',this.value)">`:`<b>${(+cfg.weights[k]||0).toFixed(2)} %</b>`}</label>`).join('')}</div></div><div class="cd"><div class="ct">Grille interne des regards</div><div class="param-readonly-list">${Object.values(GC_STAGES).map(s=>`<div><b>${s.label}</b><span>${Math.round(s.progress*100)} % du regard</span></div>`).join('')}</div><div class="saisie-note">Cette grille n’est pas affichée dans le tableau de bord public ; elle reste consultable ici pour rendre le calcul auditable.</div></div></div>`;
 }
 function renderParamPlanning(cfg){
   const plan=activePlanningVersion(cfg),editable=!!PARAM_DRAFT&&!plan?.locked;
@@ -1850,6 +1907,8 @@ function renderParamPlanning(cfg){
     ${versions.length>1?`<div class="planning-history"><b>Versions conservées</b>${versions.map(v=>`<span>${escHtml(v.label)} · ${v.deadline?fD(v.deadline):'sans échéance'} · ${v.locked?'validée':'brouillon'}</span>`).join('')}</div>`:''}</div>`;
 }
 function renderParamRevisions(cfg){return`<div class="cd"><div class="ct">Historique des révisions du paramétrage</div>${cfg.revisions?.length?`<table class="tb"><thead><tr><th>Date</th><th>Motif</th><th>Auteur</th><th class="nr">Linéaire avant</th><th class="nr">Linéaire après</th></tr></thead><tbody>${[...cfg.revisions].reverse().map(r=>`<tr><td>${fD(r.date.slice(0,10))}</td><td>${escHtml(r.reason)}</td><td>${escHtml(r.author)}</td><td class="nr">${fmt(r.previousTotal)} ml</td><td class="nr">${fmt(r.newTotal)} ml</td></tr>`).join('')}</tbody></table>`:'<div class="param-empty">Aucune révision validée depuis la création de ce registre.</div>'}</div>`;}
+const renderParamRulesBeforeDesignations=renderParamRules;
+renderParamRules=function(cfg){return renderParamRulesBeforeDesignations(cfg)+renderActivityDesignations(cfg);};
 function pgParametrageProjet(){
   const cfg=activeProjectParamConfig(),editing=!!PARAM_DRAFT;if(editing&&cfg.planning?.mode==='manual'&&!(activePlanningVersion(cfg)?.rows||[]).length)syncPlanningMonths(true);const tabs=[['identity','Identité'],['network','Structure réseau'],['planning','Planning global'],['works','Ouvrages & jalons'],['rules','Méthode de calcul'],['revisions','Révisions']],errors=editing?projectConfigErrors(cfg).filter(e=>!e.startsWith('Le motif')):[];
   let body=PARAM_SECTION==='network'?renderParamNetwork(cfg):PARAM_SECTION==='planning'?renderParamPlanning(cfg):PARAM_SECTION==='works'?renderParamWorks(cfg):PARAM_SECTION==='rules'?renderParamRules(cfg):PARAM_SECTION==='revisions'?renderParamRevisions(cfg):renderParamIdentity(cfg);
@@ -1860,18 +1919,19 @@ function pgParametrageProjet(){
 }
 function pgSaisiePreparation(ex,cuBefore,reportKind){
   const legacy=!!PROJECT_CONFIG.migration?.legacyPreparationFrozen;
-  let h=`<div class="saisie-panel-intro"><div><b>Préparation terrain du jour</b><span>Renseignez les quantités exécutées ce jour : implantation et bardage en ml, ouverture de voie en m². Jamais un cumul.</span></div></div>
-    ${legacy?`<div class="saisie-note saisie-legacy-note">Les historiques d’implantation et de bardage de ${escHtml(projectShortName())} restent repris au ${fD(ETAT_INITIAL_DATE)}. Les champs ci-dessous servent uniquement aux travaux nouveaux ou aux corrections postérieures.</div>`:''}`;
+  let h=`<div class="saisie-panel-intro"><div><b>Préparation terrain du jour</b><span>Renseignez les quantités exécutées ce jour : ${escHtml(activityName('topographie','implantation'))} et ${escHtml(activityName('bardage','bardage'))} en ml, ouverture de voie en m². Jamais un cumul.</span></div></div>
+    ${legacy?`<div class="saisie-note saisie-legacy-note">Les historiques d’${escHtml(activityName('topographie','implantation'))} et de ${escHtml(activityName('bardage','bardage'))} de ${escHtml(projectShortName())} restent repris au ${fD(ETAT_INITIAL_DATE)}. Les champs ci-dessous servent uniquement aux travaux nouveaux ou aux corrections postérieures.</div>`:''}`;
+  h+=`<p class="saisie-note">${escHtml(preparationInstruction())}</p>`;
   ZN.forEach(zone=>{
     const locs=LOC.filter(l=>l.z===zone);
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#6366f1':'#7c6df2'}"></span> Préparation — Zone ${escHtml(zone)}</div>`;
     locs.forEach(loc=>{
       const exL=ex?.loc?.[loc.id]||{},cuL=cuBefore?.[loc.id]||{};
-      h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>Implantation topo du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
-      h+=`<div class="road-opening-entry"><label for="road_${loc.id}">Ouverture de voie du jour (m²)<input type="number" class="ci movement-input" id="road_${loc.id}" value="${typeof exL.roadAreaDay==='number'&&Number.isFinite(exL.roadAreaDay)?exL.roadAreaDay:''}" ${reportKind==='production'?'min="0"':''} step=".01" inputmode="decimal" placeholder="Non renseigné"></label><div><b>Cumul avant rapport : ${cuL.roadAreaKnown?fmtArea(cuL.roadArea)+' m²':'non renseigné'}</b><small>Surface réellement ouverte pour ce front, calculée selon la largeur retenue sur le projet. À saisir une seule fois, tous DN confondus. Distincte de la fouille de tranchée ; hors indice physique.</small></div></div>`;
+      h+=`<div class="prep-loc"><div class="prep-loc-head"><div><b>${escHtml(loc.nm)}</b><span>${fmt(loc.tot)} ml contractuels</span></div><label><span>${escHtml(activityName('topographie','Implantation topo'))} du jour (ml)</span><input type="number" class="ci movement-input" id="topo_${loc.id}" value="${exL.topoDay??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></label><small>Cumul avant rapport : ${fmt(Math.min(loc.tot,+cuL.topoMl||0))} ml</small></div>`;
+      h+=`<div class="road-opening-entry"><label for="road_${loc.id}">${escHtml(activityName('ouverture_voie','Ouverture de voie'))} du jour (m²)<input type="number" class="ci movement-input" id="road_${loc.id}" value="${typeof exL.roadAreaDay==='number'&&Number.isFinite(exL.roadAreaDay)?exL.roadAreaDay:''}" ${reportKind==='production'?'min="0"':''} step=".01" inputmode="decimal" placeholder="Non renseigné"></label><div><b>Cumul avant rapport : ${cuL.roadAreaKnown?fmtArea(cuL.roadArea)+' m²':'non renseigné'}</b><small>Surface réellement ouverte pour ce front, calculée selon la largeur retenue sur le projet. À saisir une seule fois, tous DN confondus. Distincte de la fouille de tranchée ; hors indice physique.</small></div></div>`;
       loc.zones.forEach(zn=>{
         const exZ=exL.zones?.[zn.zid]||{};
-        h+=`<div class="prep-zone"><div class="zn-label"><span class="zn-tag">${escHtml(zn.nm||'Tronçon unique')}</span><span class="zn-tot">Bardage du jour par DN</span></div><table class="tb prep-table"><thead><tr><th>DN</th><th class="nr">Prévu</th><th class="nr">Cumul avant rapport</th><th class="nr">Bardage du jour</th></tr></thead><tbody>`;
+        h+=`<div class="prep-zone"><div class="zn-label"><span class="zn-tag">${escHtml(zn.nm||'Tronçon unique')}</span><span class="zn-tot">${escHtml(activityName('bardage','Bardage'))} du jour par DN</span></div><table class="tb prep-table"><thead><tr><th>DN</th><th class="nr">Prévu</th><th class="nr">Cumul avant rapport</th><th class="nr">${escHtml(activityName('bardage','Bardage'))} du jour</th></tr></thead><tbody>`;
         Object.keys(zn.dn).sort((a,b)=>+a-+b).forEach(dn=>{
           const exD=exZ[dn]||{},before=cuL.zones?.[zn.zid]?.dn?.[dn]?.bar||0;
           h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td><td class="nr">${fmt(zn.dn[dn])}</td><td class="nr">${fmt(before)}</td><td><input type="number" class="ci movement-input" id="bar_${loc.id}_${zn.zid}_${dn}" value="${exD.barDay??''}" ${reportKind==='production'?'min="0"':''} step=".01" placeholder="0"></td></tr>`;
@@ -1929,14 +1989,14 @@ function reportFinishingRows(rp,zoneFilter=''){
     Object.entries(fin.regards?.[l.id]||{}).forEach(([rid,value])=>{
       const stage=typeof value==='string'?value:value?.stage;
       if(!stage)return;
-      rows.push({type:'Regard GC',localite:l.nm,ouvrage:rid.split('-').pop(),etat:stageLabel(stage),reference:meta.reference||'',note:meta.note||''});
+      rows.push({type:activityName('gc','Regard GC'),localite:l.nm,ouvrage:rid.split('-').pop(),etat:stageLabel(stage),reference:meta.reference||'',note:meta.note||''});
     });
     const rinse=fin.rincage?.[l.id];
     const rinseStatus=typeof rinse==='string'?rinse:rinse?.status;
-    if(rinseStatus)rows.push({type:'Rinçage-désinfection',localite:l.nm,ouvrage:'Localité',etat:RINSE_STATUSES[rinseStatus]||rinseStatus,reference:rinse?.reference||'',note:''});
+    if(rinseStatus)rows.push({type:activityName('rincage','Rinçage-désinfection'),localite:l.nm,ouvrage:'Localité',etat:RINSE_STATUSES[rinseStatus]||rinseStatus,reference:rinse?.reference||'',note:''});
     const reco=fin.recolement?.[l.id];
     const recoStatus=typeof reco==='string'?reco:reco?.status;
-    if(recoStatus)rows.push({type:'Plan de récolement',localite:l.nm,ouvrage:'Localité',etat:RECO_STATUSES[recoStatus]||recoStatus,reference:reco?.reference||'',note:''});
+    if(recoStatus)rows.push({type:activityName('recolement','Plan de récolement'),localite:l.nm,ouvrage:'Localité',etat:RECO_STATUSES[recoStatus]||recoStatus,reference:reco?.reference||'',note:''});
   });
   return rows;
 }
@@ -2094,7 +2154,7 @@ function pgSaisie(){
         const dns=Object.keys(zn.dn).sort((a,b)=>a-b);
         const exZ=exL.zones?.[zn.zid]||{};
         if(hasZ||materialTracking())h+=`<div class="zn-label"><span class="zn-tag">${escHtml(zoneCaption(zn))}</span><span class="zn-tot">${fmt(zn.tot)} ml</span></div>`;
-        h+=`<table class="tb dnt ${materialTracking()&&!weldedZone(zn)?'pvc-production':''}"><thead><tr><th>DN</th><th>Prévu</th><th class="nr weld-cell">Soudure PEHD</th><th class="nr">Fouille</th><th class="nr">Pose</th><th class="nr">Essai</th></tr></thead><tbody>`;
+        h+=`<table class="tb dnt ${materialTracking()&&!weldedZone(zn)?'pvc-production':''}"><thead><tr><th>DN</th><th>Prévu</th><th class="nr weld-cell">${escHtml(activityName('assemblage','Soudure PEHD'))}</th><th class="nr">${escHtml(activityName('ouverture','Fouille'))}</th><th class="nr">${escHtml(activityName('fermeture','Pose'))}</th><th class="nr">${escHtml(activityName('essais','Essai'))}</th></tr></thead><tbody>`;
         dns.forEach(dn=>{const exD=exZ[dn]||{};
           h+=`<tr><td><span class="dntg" style="background:${DN_CLR[dn]||'#8a95a5'}15;color:${DN_CLR[dn]||'#8a95a5'};border:1px solid ${DN_CLR[dn]||'#8a95a5'}44">DN ${dn}</span></td>
             <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8a95a5">${fmt(zn.dn[dn])}</td>
@@ -2273,7 +2333,7 @@ function renderReportConstraints(date,rp){
     const loc=c.localite==='tous'?'Ensemble du chantier':(LOC.find(l=>l.id===c.localite)?.nm||c.localite);
     const durationDays=constraintDurationDays(c);
     h+=`<div class="constraint-report-item">
-      <div class="constraint-report-top"><b>${escHtml(loc)} · ${escHtml(CONTRAINTE_ACTIVITES[c.activite]||c.activite||'Activité non précisée')}</b><span class="constraint-effect constraint-effect--${c.effet}">${escHtml(CONTRAINTE_EFFETS[c.effet]||c.effet||'Effet non précisé')}</span></div>
+      <div class="constraint-report-top"><b>${escHtml(loc)} · ${escHtml(constraintActivityLabels()[c.activite]||c.activite||'Activité non précisée')}</b><span class="constraint-effect constraint-effect--${c.effet}">${escHtml(CONTRAINTE_EFFETS[c.effet]||c.effet||'Effet non précisé')}</span></div>
       <div class="constraint-report-fact">${escHtml(c.observation||'')}</div>
       <div class="constraint-report-meta">${c.dateFait&&c.dateFait!==date?`<span>Fait du ${fD(c.dateFait)} · rattaché à ce rapport</span>`:''}<span>Cause : ${escHtml(CONTRAINTE_CAUSES[c.cause]||c.cause||'—')}</span><span>Durée : ${durationDays?fmt(durationDays)+' j':'À compléter'}</span><span>Imputabilité : ${escHtml(CONTRAINTE_IMPUTABILITES[c.imputabilite]||'À analyser')}</span></div>
       ${c.moyens||c.action||c.reference?`<div class="constraint-report-detail">${c.moyens?`<span><b>Moyens :</b> ${escHtml(c.moyens)}</span>`:''}${c.action?`<span><b>Action :</b> ${escHtml(c.action)}</span>`:''}${c.reference?`<span><b>Référence :</b> ${escHtml(c.reference)}</span>`:''}</div>`:''}
@@ -2471,7 +2531,7 @@ function pgDailyRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let c
       <div class="kc"><div class="kl">Ouvrages GC</div><div class="kv">${synth.civil||synth.gcProgressTotal>0?synth.rates.gc.toFixed(1)+'%':'Non renseigné'}</div><div class="ksb">${synth.civil?'Toutes les familles GC pondérées':`${synth.gcDone} / ${synth.gcTotal} regards réceptionnés`}</div></div>
       <div class="kc"><div class="kl">Mise en service & documents</div><div class="report-dual-kpi"><span>Rinçage <b>${synth.rates.rincage.toFixed(1)}%</b></span><span>Récolement <b>${synth.rates.recolement.toFixed(1)}%</b></span></div></div>
     </div>
-    <div class="report-production-strip">${roadOpeningSummary(cu).known?`<span><b>Ouverture de voie</b>${fmtArea(roadOpeningSummary(cu).area)} m² déclarés</span>`:''}<span><b>Implantation topo</b>${fmt(synth.topoLength)} ml · ${synth.rates.topographie.toFixed(1)}%</span><span><b>Bardage</b>${fmt(synth.totals.bar)} ml · ${synth.rates.bardage.toFixed(1)}%</span>${weldingVisible()?`<span><b>Soudure PEHD</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>Fouille</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
+    <div class="report-production-strip">${roadOpeningSummary(cu).known?`<span><b>Ouverture de voie</b>${fmtArea(roadOpeningSummary(cu).area)} m² déclarés</span>`:''}<span><b>${escHtml(activityName('topographie','Implantation topo'))}</b>${fmt(synth.topoLength)} ml · ${synth.rates.topographie.toFixed(1)}%</span><span><b>${escHtml(activityName('bardage','Bardage'))}</b>${fmt(synth.totals.bar)} ml · ${synth.rates.bardage.toFixed(1)}%</span>${weldingVisible()?`<span><b>${escHtml(activityName('assemblage','Soudure PEHD'))}</b>${fmt(synth.totals.soud)} ml · ${synth.rates.assemblage.toFixed(1)}%</span>`:''}<span><b>${escHtml(activityName('ouverture','Fouille'))}</b>${fmt(synth.totals.fou)} ml · ${synth.rates.ouverture.toFixed(1)}%</span><span><b>Pose retenue</b>${fmt(synth.totals.rem)} ml · ${synth.rates.fermeture.toFixed(1)}%</span></div>
     ${qualite.ecartPlafonnement>0.05?`<details class="report-quality no-print"><summary>Contrôle des données brutes</summary><div>La pose brute saisie est de ${fmt(qualite.remblaiBrut)} ml ; ${fmt(qualite.remblaiPlafonne)} ml sont retenus après plafonnement par zone et DN. Écart à analyser : ${fmt(qualite.ecartPlafonnement)} ml.</div></details>`:''}
     ${rp.kind==='correction'||negCount?`<div class="alert-box" style="border-color:#f5a623;background:#fffaf0"><div class="alert-header">🧾 Rapport de correction · ${negCount} mouvement${negCount>1?'s':''} négatif${negCount>1?'s':''}</div><div class="alert-body"><b>Motif :</b> ${escHtml(rp.correctionReason||'Correction historique — motif initial non documenté')}</div></div>`:''}
     ${renderCivilCumulative(cu)}
@@ -2581,20 +2641,20 @@ function whatsappSummary(cu,zone=null){
 function whatsappCumulativeLines(s,cu){
   const lines=[],add=text=>lines.push('  ▸ '+text);
   const road=roadOpeningSummary(cu,s.locs);
-  if(road.known)add(`Ouverture de voie: ${fmtArea(road.area)} m²`);
-  add(`Implantation topo: ${fmt(s.topoLength)} / ${fmt(s.planned)} ml (${s.topoRate.toFixed(1)}%)`);
-  add(`Bardage: ${fmt(s.barLength)} / ${fmt(s.planned)} ml (${s.barRate.toFixed(1)}%)`);
-  if(weldingVisible(s.locs))add(`Soudure PEHD: ${fmt(s.totals.soud)} ml (${s.rates.soud.toFixed(1)}%)`);
-  add(`Fouille: ${fmt(s.totals.fou)} / ${fmt(s.planned)} ml (${s.rates.fou.toFixed(1)}%)`);
+  if(road.known)add(`${activityName('ouverture_voie','Ouverture de voie')}: ${fmtArea(road.area)} m²`);
+  add(`${activityName('topographie','Implantation topo')}: ${fmt(s.topoLength)} / ${fmt(s.planned)} ml (${s.topoRate.toFixed(1)}%)`);
+  add(`${activityName('bardage','Bardage')}: ${fmt(s.barLength)} / ${fmt(s.planned)} ml (${s.barRate.toFixed(1)}%)`);
+  if(weldingVisible(s.locs))add(`${activityName('assemblage','Soudure PEHD')}: ${fmt(s.totals.soud)} ml (${s.rates.soud.toFixed(1)}%)`);
+  add(`${activityName('ouverture','Fouille')}: ${fmt(s.totals.fou)} / ${fmt(s.planned)} ml (${s.rates.fou.toFixed(1)}%)`);
   {
-    add(`Conduite posée: *${fmt(s.totals.pose)} / ${fmt(s.planned)} ml (${s.rates.pose.toFixed(1)}%)*`);
+    add(`${activityName('fermeture','Conduite posée')}: *${fmt(s.totals.pose)} / ${fmt(s.planned)} ml (${s.rates.pose.toFixed(1)}%)*`);
     add(`Reste à poser: *${fmt(Math.max(0,s.planned-s.totals.pose))} ml*`);
   }
-  add(`Essais conformes: ${fmt(s.totals.ess)} ml (${s.rates.ess.toFixed(1)}%)`);
-  if(s.gcTotal)add(`Regards GC: ${s.rates.gc.toFixed(1)}% · ${s.gcDone}/${s.gcTotal} réceptionnés`);
+  add(`${activityName('essais','Essais conformes')}: ${fmt(s.totals.ess)} ml (${s.rates.ess.toFixed(1)}%)`);
+  if(s.gcTotal)add(`${activityName('gc','Regards GC')}: ${s.rates.gc.toFixed(1)}% · ${s.gcDone}/${s.gcTotal} réceptionnés`);
   // Un état réalisé/transmis reste visible même avant validation : 0 % validé
   // ne signifie pas que ces travaux n'ont pas commencé.
-  for(const [key,label,statuses,rate] of [['rincageStatus','Rinçage-désinfection',RINSE_STATUSES,s.rates.rinse],['recolementStatus','Plans de récolement',RECO_STATUSES,s.rates.reco]]){
+  for(const [key,label,statuses,rate] of [['rincageStatus',activityName('rincage','Rinçage-désinfection'),RINSE_STATUSES,s.rates.rinse],['recolementStatus',activityName('recolement','Plans de récolement'),RECO_STATUSES,s.rates.reco]]){
     const counts={};
     for(const l of s.locs){const status=cu[l.id]?.[key];if(status&&status!=='non_demarre'&&status!=='valide'&&statuses[status])counts[status]=(counts[status]||0)+1;}
     const parts=[rate.toFixed(1)+'% validés'];
@@ -2612,10 +2672,10 @@ function whatsappFrontCumulativeBlocks(locs,cu){
       for(const k of Object.keys(totals))totals[k]+=Number(d[k])||0;
     }
     return `📍 *${l.nm}*\n`+
-      `  ▸ Fouille: ${fmt(totals.f)} ml\n`+
-      `  ▸ Conduite posée: *${fmt(totals.r)} / ${fmt(l.tot)} ml*\n`+
+      `  ▸ ${activityName('ouverture','Fouille')}: ${fmt(totals.f)} ml\n`+
+      `  ▸ ${activityName('fermeture','Conduite posée')}: *${fmt(totals.r)} / ${fmt(l.tot)} ml*\n`+
       `  ▸ Reste à poser: ${fmt(Math.max(0,l.tot-totals.r))} ml\n`+
-      `  ▸ Essais conformes: ${fmt(totals.ess)} ml\n`;
+      `  ▸ ${activityName('essais','Essais conformes')}: ${fmt(totals.ess)} ml\n`;
   });
 }
 function whatsappText(date,rp,cu,zone=null){
@@ -2646,7 +2706,7 @@ function whatsappText(date,rp,cu,zone=null){
     for(const c of constraints){
       const l=LOC.find(l=>l.id===c.localite),loc=c.localite==='tous'?'Ensemble chantier':l?`${l.z} · ${l.nm}`:c.localite;
       const durationDays=constraintDurationDays(c);
-      txt+=`⚠️ *${loc} — ${CONTRAINTE_ACTIVITES[c.activite]||c.activite||'Activité'}*\n`;
+      txt+=`⚠️ *${loc} — ${constraintActivityLabels()[c.activite]||c.activite||'Activité'}*\n`;
       txt+=`  ▸ Statut: *${CONTRAINTE_STATUTS[c.statut]||'Non renseigné'}*\n`;
       if(c.dateFait&&c.dateFait!==date)txt+=`  ▸ Fait signalé le ${fD(c.dateFait)} · rattaché à ce rapport\n`;
       txt+=`  ▸ ${CONTRAINTE_EFFETS[c.effet]||c.effet||'Effet'} · ${durationDays?fmt(durationDays)+' j':'durée à compléter'}\n`;
@@ -2968,7 +3028,7 @@ function renderAleasCard(){
   if(recent.length){
     h+=`<div class="constraint-latest">${recent.map(c=>{
       const loc=c.localite==='tous'?'Ensemble':(LOC.find(l=>l.id===c.localite)?.nm||c.localite);
-      return`<div><span>${fD(c.date)}</span><b>${escHtml(loc)} · ${escHtml(CONTRAINTE_ACTIVITES[c.activite]||c.activite)}</b><small>${escHtml(c.observation||'')}</small></div>`;
+      return`<div><span>${fD(c.date)}</span><b>${escHtml(loc)} · ${escHtml(constraintActivityLabels()[c.activite]||c.activite)}</b><small>${escHtml(c.observation||'')}</small></div>`;
     }).join('')}</div>`;
   }else{
     h+=`<div class="constraint-empty">Aucun fait structuré dans les rapports journaliers. ${legacy.length?`Les ${legacy.length} anciens aléas sont conservés dans l’historique à reclasser.`:'Le registre démarrera avec les prochaines saisies journalières.'}</div>`;
@@ -3023,7 +3083,7 @@ function pgAleas(){
     daily.forEach(c=>{
       const loc=c.localite==='tous'?'Ensemble du chantier':(LOC.find(l=>l.id===c.localite)?.nm||c.localite);
       h+=`<tr class="constraint-clickable" onclick="SD='${c.reportDate||c.date}';go('rapport')">
-        <td style="white-space:nowrap">${fD(c.date)}${c.source==='migration_v1'?`<small>Migration V1${c.reportDate&&c.reportDate!==c.date?` · rapport du ${fD(c.reportDate)}`:''}</small>`:''}</td><td><b>${escHtml(loc)}</b><small>${escHtml(CONTRAINTE_ACTIVITES[c.activite]||c.activite||'—')}</small></td>
+        <td style="white-space:nowrap">${fD(c.date)}${c.source==='migration_v1'?`<small>Migration V1${c.reportDate&&c.reportDate!==c.date?` · rapport du ${fD(c.reportDate)}`:''}</small>`:''}</td><td><b>${escHtml(loc)}</b><small>${escHtml(constraintActivityLabels()[c.activite]||c.activite||'—')}</small></td>
         <td><span class="constraint-effect constraint-effect--${c.effet}">${escHtml(CONTRAINTE_EFFETS[c.effet]||c.effet||'—')}</span><small>${escHtml(CONTRAINTE_CAUSES[c.cause]||c.cause||'')}</small></td>
         <td class="nr">${durationLabel(constraintDurationDays(c))}</td><td>${escHtml(c.observation||'—')}${c.moyens?`<small>Moyens : ${escHtml(c.moyens)}</small>`:''}</td>
         <td>${escHtml(CONTRAINTE_IMPUTABILITES[c.imputabilite]||'À analyser')}</td><td>${escHtml(c.action||'—')}${c.reference?`<small>Réf. : ${escHtml(c.reference)}</small>`:''}</td>
@@ -3329,7 +3389,7 @@ function pgDG(){
   const restePoser=Math.max(0,tP-synth.totals.rem);
   const finance=syntheseFinanciereValidee()||financeSummaryAsSynthese(),avFinancier=finance?.taux??null,mobilisation=mobilisationChantierSummary(dernierRpt||today());
   const activityRow=(label,pct,value,color,note='')=>`<div class="activity-row">
-    <div class="activity-row-head"><span>${label}</span><strong>${pct===null?'Non renseigné':pct.toFixed(1)+'%'}</strong></div>
+    <div class="activity-row-head"><span>${escHtml(label)}</span><strong>${pct===null?'Non renseigné':pct.toFixed(1)+'%'}</strong></div>
     <div class="activity-track ${pct===null?'activity-track--pending':''}"><span style="width:${pct===null?0:Math.min(100,pct)}%;background:${color}"></span></div>
     ${value||note?`<div class="activity-row-foot">${value}${note?`<em>${note}</em>`:''}</div>`:''}
   </div>`;
@@ -3379,13 +3439,13 @@ function pgDG(){
   h+=`<div class="activity-overview">
     <div class="activity-group"><div class="activity-title"><span class="activity-dot" style="background:#6366f1"></span>Préparation</div>
       ${activityRow('Mobilisation du chantier',mobilisation.rate,`Hors indice physique · ${mobilisation.source}`,'#94a3b8')}
-      ${activityRow('Implantation topo',synth.rates.topographie,fmt(synth.topoLength)+' ml','#6366f1')}
-      ${activityRow('Bardage',synth.rates.bardage,fmt(synth.totals.bar)+' ml','#7c6df2')}
+      ${activityRow(activityName('topographie','Implantation topo'),synth.rates.topographie,fmt(synth.topoLength)+' ml','#6366f1')}
+      ${activityRow(activityName('bardage','Bardage'),synth.rates.bardage,fmt(synth.totals.bar)+' ml','#7c6df2')}
     </div>
     <div class="activity-group"><div class="activity-title"><span class="activity-dot" style="background:#2c7be5"></span>Production réseau</div>
-      ${weldingVisible()?activityRow('Soudure PEHD',synth.rates.assemblage,fmt(synth.totals.soud)+' ml','#2c7be5'):''}
-      ${activityRow('Fouille',synth.rates.ouverture,fmt(synth.totals.fou)+' ml','#f5a623')}
-      ${activityRow('Conduite posée',synth.rates.fermeture,fmt(synth.totals.rem)+' ml','#36b37e')}
+      ${weldingVisible()?activityRow(activityName('assemblage','Soudure PEHD'),synth.rates.assemblage,fmt(synth.totals.soud)+' ml','#2c7be5'):''}
+      ${activityRow(activityName('ouverture','Fouille'),synth.rates.ouverture,fmt(synth.totals.fou)+' ml','#f5a623')}
+      ${activityRow(activityName('fermeture','Conduite posée'),synth.rates.fermeture,fmt(synth.totals.rem)+' ml','#36b37e')}
     </div>
     <div class="activity-group"><div class="activity-title"><span class="activity-dot" style="background:#0b7285"></span>Ouvrages GC</div>
       ${synth.civil?activityRow('Avancement de l’ensemble GC',synth.rates.gc,'Familles pondérées','#0b7285'):activityRow('Avancement des regards',synth.gcProgressTotal>0?synth.rates.gc:null,synth.gcProgressTotal>0?`${synth.gcDone} / ${synth.gcTotal} réceptionnés`:'','#0b7285')}
@@ -3580,7 +3640,7 @@ function pgDG(){
       </div>
       <div style="overflow-x:auto"><table class="tb"><thead><tr>
         <th>Lot</th><th>Localité</th><th>Zone</th><th class="nr">Linéaire de référence</th>
-        <th class="nr lot-detail" style="${lotDetailStyle}">Bardage saisi</th>
+        <th class="nr lot-detail" style="${lotDetailStyle}">${escHtml(activityName('bardage','Bardage'))} saisi</th>
         ${weldingVisible()?`<th class="nr lot-detail" style="${lotDetailStyle}">Soudure saisie</th>`:''}
         <th class="nr lot-detail" style="${lotDetailStyle}">Fouille saisie</th>
         <th class="nr lot-detail" style="${lotDetailStyle}">Pose saisie</th>
@@ -3846,7 +3906,7 @@ function exportExcelCumul(){
   rows.push(['Attachement quantitatif — Cumul au '+fD(today())]);
   rows.push([]);
   rows.push(['Lot','Localité','Zone','Sous-zone','DN','Prévu (ml)',
-    'Bardage (ml)','% Bar',
+    activityName('bardage','Bardage')+' (ml)','% Bar',
     'Soudure (ml)','% Soud',
     'Fouille (ml)','% Fou',
     'Pose (ml)','% Pose',
@@ -3943,7 +4003,7 @@ function exportExcelCumul(){
   rows2.push(['Pondérations actives (%) : '+Object.entries(PHYSICAL_WEIGHTS).map(([k,v])=>k+'='+v).join(' ; ')]);
   rows2.push([]);
   rows2.push(['Lot','Localité','Zone','Prévu (ml)','Coef lot',
-    '% Implantation','% Bardage','% Soudure','% Fouille','% Pose','% Essais','% GC','% Récolement',
+    '% Implantation','% '+activityName('bardage','Bardage'),'% Soudure','% Fouille','% Pose','% Essais','% GC','% Récolement',
     'Indice opérationnel interne']);
   
   LOC.forEach((l,i)=>{
@@ -4011,7 +4071,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.8.9 — saisie optimisée pour téléphone, 04/10/2026' ,
+      version_app:'2.9.0 — saisie optimisée pour téléphone, 04/10/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4689,7 +4749,7 @@ function reportQuantityWarnings(data){
     if(cu[l.id].topoMl>l.tot+.01||cu[l.id].topoMl<-.01)warnings.push(l.nm+' : cumul topo hors du linéaire prévu.');
     for(const z of l.zones)for(const [dn,planned] of Object.entries(z.dn)){
       const d=cu[l.id].zones[z.zid].dn[dn];
-      for(const [key,label] of [['bar','Bardage'],['f','Fouille'],['r','Pose'],['ess','Essai'],...((!materialTracking()||weldedZone(z))?[['s','Soudure']]:[])]){
+      for(const [key,label] of [['bar',activityName('bardage','Bardage')],['f','Fouille'],['r','Pose'],['ess','Essai'],...((!materialTracking()||weldedZone(z))?[['s','Soudure']]:[])]){
         if(d[key]>planned+.01||d[key]<-.01)warnings.push(`${l.nm} / ${zoneCaption(z)} / DN ${dn} : ${label} cumulé ${fmt(d[key])} m, prévu ${fmt(+planned)} m.`);
       }
       if(d.ess>d.r+.01)warnings.push(`${l.nm} / ${zoneCaption(z)} / DN ${dn} : essais supérieurs au linéaire posé.`);
@@ -4704,7 +4764,7 @@ if(document.addEventListener){
 window.addEventListener('beforeunload',event=>{if(V==='saisie')captureReportDraft();if(FILE_BUSY||syncing||CONFIG_SAVING||(V==='saisie'&&readReportDraft())){event.preventDefault();event.returnValue='';}});
 window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDraft;window.discardReportDraft=discardReportDraft;
 
-// Pièces jointes privées — SIYO Pilot 2.8.9
+// Pièces jointes privées — SIYO Pilot 2.9.0
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
 function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
@@ -4791,7 +4851,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.8.9');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.0');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -4995,8 +5055,8 @@ const whatsappCumulativeLinesBeforeCivil=whatsappCumulativeLines;
 whatsappCumulativeLines=function(s,cu){
  const lines=whatsappCumulativeLinesBeforeCivil(s,cu);if(!hasCivil(s.locs))return lines;
  const summary=civilSummary(s.locs,cu),reg=summary.families.find(f=>f.kind==='regards');
- const ix=lines.findIndex(x=>x.includes('Regards GC:'));if(ix>=0)lines[ix]='  ▸ Regards GC: '+(reg?.rate||0).toFixed(1)+'% · '+s.gcDone+'/'+s.gcTotal+' terminés';
- const at=lines.findIndex(x=>x.includes('Rinçage-désinfection:'));
+ const ix=lines.findIndex(x=>x.includes(activityName('gc','Regards GC')+':'));if(ix>=0)lines[ix]='  ▸ '+activityName('gc','Regards GC')+': '+(reg?.rate||0).toFixed(1)+'% · '+s.gcDone+'/'+s.gcTotal+' terminés';
+ const at=lines.findIndex(x=>x.includes(activityName('rincage','Rinçage-désinfection')+':'));
  lines.splice(at<0?lines.length:at,0,'  ▸ Avancement GC pondéré: '+summary.rate.toFixed(1)+'%',...civilCumulativeLines(s.locs,cu).map(x=>'  ▸ '+x));return lines;
 };
 // Production par famille : pas d’addition trompeuse de bornes et de clôtures.
@@ -5380,8 +5440,8 @@ function prepareSaisieMobile(){
       });
     });
   }
-  root.querySelectorAll('.dnt').forEach(t=>labelTable(t,'network',['DN','Prévu (m)','Soudure (m)','Fouille (m)','Pose (m)','Essai (m)']));
-  root.querySelectorAll('.prep-table').forEach(t=>labelTable(t,'preparation',['DN','Prévu (m)','Avant ce rapport (m)','Bardage du jour (m)']));
+  root.querySelectorAll('.dnt').forEach(t=>labelTable(t,'network',['DN','Prévu (m)',activityName('assemblage','Soudure')+' (m)',activityName('ouverture','Fouille')+' (m)',activityName('fermeture','Pose')+' (m)',activityName('essais','Essai')+' (m)']));
+  root.querySelectorAll('.prep-table').forEach(t=>labelTable(t,'preparation',['DN','Prévu (m)','Avant ce rapport (m)',activityName('bardage','Bardage')+' du jour (m)']));
   root.querySelectorAll('.finish-table').forEach(t=>{
     const regards=!!t.querySelector('[id^="gcs_"]');
     labelTable(t,regards?'regards':'commissioning',regards?['Regard','État précédent','Nouvelle étape']:['Localité','Rinçage précédent','Rinçage du jour','Récolement précédent','Récolement du jour','Référence / PV']);
@@ -5701,7 +5761,7 @@ button:disabled{opacity:.55;cursor:wait}.param-zone-head{flex-wrap:wrap;gap:10px
 
 .report-save-notice{border:1px solid #cbd5e1;border-left:5px solid #64748b;border-radius:10px;padding:14px 16px;margin:0 0 16px;background:#f8fafc;line-height:1.5;overflow-wrap:anywhere}.report-save-notice b{display:block;font-size:15px}.report-save-notice p{font-size:12px;margin:6px 0}.report-save--pending{border-color:#ef4444;background:#fff1f2;color:#991b1b}.report-save--saved{border-color:#16a34a;background:#f0fdf4;color:#166534}.report-save--sending{border-color:#2563eb;background:#eff6ff;color:#1e40af}.report-save-notice .draft-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}@media(max-width:600px){.report-save-notice .draft-actions button{width:100%;min-height:44px}.report-save-notice{padding:12px}}
 
-/* 2.8.9 — phone entry layout, scoped to the editor. */
+/* 2.9.0 — phone entry layout, scoped to the editor. */
 .entry-front-switch,.entry-tab-short{display:none}
 .entry-attachments>summary{display:none}
 @media screen and (max-width:700px){
