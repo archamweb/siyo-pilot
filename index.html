@@ -1835,9 +1835,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.4</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.5</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.4</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.5</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button>
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
@@ -3014,24 +3014,65 @@ function groupByMonth(){
 
 // ── KPI PILOTAGE ──
 
-// Cadence effective du chantier : médiane des 20 derniers jours productifs.
-// Les journées sans pose ne sont pas intégrées ici car les arrêts sont traités
-// séparément par la date de reprise. Cette cadence décrit le dispositif réel,
-// pas la performance théorique d'une équipe isolée.
-function cadencePoseObservee(limit=20){
-  const valeurs=dbDates().sort().map(d=>{
-    if(db[d]?.kind==='correction')return 0;
-    let total=0;LOC.forEach(l=>{total+=Math.max(0,dayTot(db[d],l.id).r);});return total;
-  }).filter(v=>v>0).slice(-limit).sort((a,b)=>a-b);
-  if(!valeurs.length)return 0;
-  const m=Math.floor(valeurs.length/2);
-  return valeurs.length%2?valeurs[m]:(valeurs[m-1]+valeurs[m])/2;
+
+// Référence de projection : la dernière semaine civile terminée, sans retour
+// sélectif à une ancienne semaine plus productive. Les corrections restent à part.
+function weeklyProjectionReference(now=today()){
+  const model=weeklyModel(weeklyDefault(now),now),metric=model.totals.pose;
+  const dataDate=dbDates().filter(d=>weeklyValidDate(d)&&d<=now&&db[d]?.kind!=='correction').sort().at(-1)||null;
+  const dataAgeDays=dataDate?Math.max(0,calendarDiff(dataDate,now)):null;
+  const fullWeek=model.from===model.monday&&model.to===model.sunday&&model.expected.length===6;
+  const complete=fullWeek&&metric.complete===true,production=metric.known?metric.production:null;
+  let status='available',reason='';
+  if(!model.start){status='missing_start';reason='Date de début du projet non renseignée.';}
+  else if(!fullWeek){status='partial_start';reason='Aucune semaine entière de suivi terminée depuis le démarrage.';}
+  else if(!complete){status='incomplete';reason='La dernière semaine terminée est incomplète : compléter les rapports avant de projeter.';}
+  else if(!(production>0)){status='zero';reason='Aucune pose déclarée sur la dernière semaine terminée : fin de pose non estimable à ce rythme.';}
+  return{production,rate:complete&&production!==null?production/6:null,from:model.from,to:model.to,monday:model.monday,sunday:model.sunday,
+    complete,available:status==='available',status,reason,corrections:metric.corrections||0,expectedDays:model.expected.length,
+    dataDate,dataAgeDays,stale:dataAgeDays!==null&&dataAgeDays>1};
+}
+// Une cadence hebdomadaire contient déjà les jours de repos et les arrêts de
+// sa semaine. On ne soustrait pas les dimanches une deuxième fois. Seule une
+// pause future explicitement configurée est ajoutée à ce délai calendaire.
+function projectionWeeklyFinish(start,days,settings){
+  if(!projectionDateValid(start)||!Number.isFinite(days)||days<0)return null;
+  if(days===0)return start;
+  let date=start,remaining=Math.ceil(days);
+  for(let n=0;n<36600;n++,date=addCalendarDays(date,1)){
+    if(!(settings.pauseStart&&settings.pauseEnd&&date>=settings.pauseStart&&date<=settings.pauseEnd)&&--remaining===0)return date;
+  }
+  return null;
+}
+function projectionBeforeWorkingTail(end,days,settings){
+  if(!projectionDateValid(end)||!Number.isFinite(days)||days<0)return null;
+  if(days===0)return end;
+  let remaining=Math.ceil(days),date=end;
+  for(let n=0;n<36600;n++,date=weeklyShift(date,-1))if(projectionWorkingDay(date,settings)&&--remaining===0)return weeklyShift(date,-1);
+  return null;
+}
+function updateWeeklyRequiredProjection(p,settings,gcReserve=0){
+  p.requiredPoseWeeklyRate=null;p.requiredPoseRate=null;p.requiredIncrease=null;
+  if(!p.weeklyMode||!p.baseDate||!p.targetDate||p.civilPending)return;
+  if(p.testDays===null){p.targetImpossibleReason='Cadence des essais à renseigner.';return;}
+  let deadline=projectionBeforeWorkingTail(p.targetDate,Math.ceil(settings.recoDays),settings);
+  if(!deadline)return;
+  if(gcReserve)deadline=weeklyShift(deadline,-gcReserve);
+  else if(p.gcDate&&p.gcDate>deadline){p.targetImpossibleReason='La branche GC dépasse déjà l’échéance cible.';return;}
+  const poseDeadline=projectionBeforeWorkingTail(deadline,(p.testDays||0)+Math.ceil(settings.raccordDays)+Math.ceil(settings.rinseDays),settings);
+  let available=0;
+  if(poseDeadline&&poseDeadline>=p.baseDate)for(let d=p.baseDate,n=0;d<=poseDeadline&&n<36600;d=weeklyShift(d,1),n++)if(!(settings.pauseStart&&settings.pauseEnd&&d>=settings.pauseStart&&d<=settings.pauseEnd))available++;
+  if(!available){p.targetImpossibleReason='Aucun délai disponible pour achever la pose avec ces opérations de fin.';return;}
+  p.requiredPoseWeeklyRate=p.restePose/available*7;p.requiredPoseRate=p.requiredPoseWeeklyRate/6;
+  p.requiredIncrease=p.poseWeeklyProduction>0?(p.requiredPoseWeeklyRate/p.poseWeeklyProduction-1)*100:null;
 }
 
+// Cadence journalière de référence issue de la semaine complète (information uniquement).
+function cadencePoseObservee(){const ref=weeklyProjectionReference();return ref.available?ref.rate:0;}
 function cadencePoseRetenue(settings){
   if(settings.poseRateSource==='planning')return CADENCE_POSE_PLANNING;
   if(settings.poseRateSource==='manual')return +settings.manualPoseRate||0;
-  return cadencePoseObservee()||CADENCE_POSE_PLANNING;
+  return cadencePoseObservee();
 }
 
 function addCalendarDays(dateStr,days){
@@ -3047,41 +3088,39 @@ function calendarDiff(a,b){
 // pose -> essais -> raccordements -> rinçage ; les regards avancent en parallèle ;
 // les plans de récolement sont ajoutés en clôture lorsqu'une durée est renseignée.
 function projectionCadences(synth,settings){
-  const tP=LOC.reduce((s,l)=>s+l.tot,0);
-  const restePose=Math.max(0,tP-synth.totals.rem);
-  const resteEssais=Math.max(0,tP-synth.totals.ess);
-  const poseRate=cadencePoseRetenue(settings);
-  const poseDays=poseRate>0?Math.ceil(restePose/poseRate):null;
-  const testDays=settings.testRate>0?Math.ceil(resteEssais/settings.testRate):null;
-  // Le reste GC vient désormais des états saisis regard par regard. Une étape
-  // partiellement réalisée réduit le reste en équivalent-regard, sans exposer
-  // la pondération interne dans l'interface de saisie.
-  const gcRemaining=Math.max(0,(synth.gcTotal||0)-(synth.gcProgressTotal||0));
-  const gcDays=Math.ceil(gcRemaining*Math.max(0,settings.gcDaysPer));
-  const networkDays=poseDays===null||testDays===null?null:
-    poseDays+testDays+Math.ceil(settings.raccordDays)+Math.ceil(settings.rinseDays);
-  const worksDays=networkDays===null?null:Math.max(networkDays,gcDays);
-  const totalDays=worksDays===null?null:worksDays+Math.ceil(settings.recoDays);
-  let date=null,deltaTarget=null;
-  if(settings.restartMode==='date'&&settings.restartDate&&totalDays!==null){
-    date=addCalendarDays(settings.restartDate,totalDays);
-    if(settings.targetMode==='date'&&settings.targetDate)deltaTarget=calendarDiff(settings.targetDate,date);
+  const tP=LOC.reduce((s,l)=>s+l.tot,0),restePose=Math.max(0,tP-synth.totals.rem),resteEssais=Math.max(0,tP-synth.totals.ess);
+  const weeklyMode=!settings.poseRateSource||settings.poseRateSource==='data',weeklyReference=weeklyMode?weeklyProjectionReference():null;
+  const poseWeeklyProduction=weeklyMode&&weeklyReference.available?weeklyReference.production:null;
+  const poseRate=weeklyMode?(weeklyReference.available?weeklyReference.rate:0):cadencePoseRetenue(settings);
+  const poseWeeks=restePose===0?0:poseWeeklyProduction>0?restePose/poseWeeklyProduction:null;
+  const rawPoseDays=restePose===0?0:weeklyMode?(poseWeeks===null?null:Math.ceil(poseWeeks*7)):(poseRate>0?Math.ceil(restePose/poseRate):null);
+  const poseHorizonExceeded=rawPoseDays!==null&&(!Number.isFinite(rawPoseDays)||rawPoseDays>36600),poseDays=poseHorizonExceeded?null:rawPoseDays;
+  const testDays=resteEssais===0?0:settings.testRate>0?Math.ceil(resteEssais/settings.testRate):null;
+  const gcRemaining=Math.max(0,(synth.gcTotal||0)-(synth.gcProgressTotal||0)),gcDays=Math.ceil(gcRemaining*Math.max(0,settings.gcDaysPer));
+  let baseDate=settings.restartMode==='date'&&projectionDateValid(settings.restartDate)?settings.restartDate:null;
+  if(weeklyMode&&baseDate&&baseDate<today())baseDate=today();
+  const poseDate=baseDate&&poseDays!==null?(weeklyMode?projectionWeeklyFinish(baseDate,poseDays,settings):projectionWorkFinish(baseDate,poseDays,settings)):null;
+  const tailDays=testDays===null?null:testDays+Math.ceil(settings.raccordDays)+Math.ceil(settings.rinseDays);
+  const networkDate=poseDate&&tailDays!==null?(tailDays>0?projectionWorkFinish(poseDays>0?addCalendarDays(poseDate,1):baseDate,tailDays,settings):poseDate):null;
+  const networkDays=networkDate?(poseDays===0&&tailDays===0?0:calendarDiff(baseDate,networkDate)+1):null;
+  const gcDate=baseDate?projectionWorkFinish(baseDate,gcDays,settings):null;
+  const worksEnd=networkDate&&gcDate?(networkDate>gcDate?networkDate:gcDate):null;
+  const date=worksEnd?(+settings.recoDays>0?projectionWorkFinish(addCalendarDays(worksEnd,1),Math.ceil(settings.recoDays),settings):worksEnd):null;
+  const totalDays=date?(poseDays===0&&tailDays===0&&gcDays===0&&!+settings.recoDays?0:calendarDiff(baseDate,date)+1):null;
+  const targetDate=settings.targetMode==='date'&&projectionDateValid(settings.targetDate)?settings.targetDate:null;
+  const deltaTarget=date&&targetDate?calendarDiff(targetDate,date):null;
+  const p={restePose,resteEssais,gcRemaining,poseRate,poseDays,testDays,gcDays,networkDays,totalDays,date,deltaTarget,
+    baseDate,targetDate,networkDate,gcDate,poseDate,weeklyMode,weeklyReference,poseWeeklyProduction,poseWeeks,poseCalendarDays:weeklyMode?poseDays:null,poseHorizonExceeded,
+    requiredPoseRate:null,requiredPoseWeeklyRate:null,requiredIncrease:null,targetImpossibleReason:poseHorizonExceeded?'Le rythme observé dépasse l’horizon de projection de 100 ans.':weeklyMode&&restePose>0&&!weeklyReference.available?weeklyReference.reason:''};
+  if(weeklyMode)updateWeeklyRequiredProjection(p,settings);
+  else if(baseDate&&targetDate){
+    const available=calendarDiff(baseDate,targetDate)+1,fixedNetwork=(testDays||0)+Math.ceil(settings.raccordDays)+Math.ceil(settings.rinseDays)+Math.ceil(settings.recoDays),poseWindow=available-fixedNetwork;
+    if(available<=0)p.targetImpossibleReason='La reprise est postérieure à l’échéance.';
+    else if(gcDate&&gcDate>targetDate)p.targetImpossibleReason='La branche regards/récolement dépasse déjà l’échéance.';
+    else if(poseWindow<=0)p.targetImpossibleReason='Aucun délai disponible pour achever la pose.';
+    else{p.requiredPoseRate=restePose/poseWindow;p.requiredIncrease=poseRate>0?(p.requiredPoseRate/poseRate-1)*100:null;}
   }
-
-  let requiredPoseRate=null,requiredIncrease=null,targetImpossibleReason='';
-  if(settings.restartMode==='date'&&settings.targetMode==='date'&&settings.restartDate&&settings.targetDate){
-    const available=calendarDiff(settings.restartDate,settings.targetDate);
-    const fixedNetwork=(testDays||0)+Math.ceil(settings.raccordDays)+Math.ceil(settings.rinseDays)+Math.ceil(settings.recoDays);
-    const poseWindow=available-fixedNetwork;
-    if(available<0)targetImpossibleReason='La reprise est postérieure à l’échéance.';
-    else if(gcDays+Math.ceil(settings.recoDays)>available)targetImpossibleReason='La branche regards/récolement dépasse déjà l’échéance.';
-    else if(poseWindow<=0)targetImpossibleReason='Aucun délai disponible pour achever la pose.';
-    else{
-      requiredPoseRate=restePose/poseWindow;
-      requiredIncrease=poseRate>0?(requiredPoseRate/poseRate-1)*100:null;
-    }
-  }
-  return{restePose,resteEssais,gcRemaining,poseRate,poseDays,testDays,gcDays,networkDays,totalDays,date,deltaTarget,requiredPoseRate,requiredIncrease,targetImpossibleReason};
+  return p;
 }
 
 // Cadence remblai sur les N derniers jours avec saisie (conservée pour affichage info)
@@ -3530,9 +3569,9 @@ function toggleDGLotDetails(){
 // Le tableau de bord rassemble les périodes dans un seul bloc, sans recréer
 // la courbe d'avancement lors d'un changement de période ou de semaine.
 const DG_PERIODS={};
-function dashboardPeriod(){return DG_PERIODS[ACTIVE_PROJECT_ID]||'month';}
+function dashboardPeriod(){return DG_PERIODS[ACTIVE_PROJECT_ID]||'week';}
 function dashboardPerformanceContent(cu,mKeys){return dashboardPeriod()==='week'?pgWeekly(true):`<div class="cd" id="dg-monthly-pivot">${renderMonthlyPivot(cu,mKeys)}</div>`;}
-function dashboardPeriodButtons(){return`<div class="wa-mode-switch" role="group" aria-label="Période des performances"><button aria-pressed="${dashboardPeriod()==='month'}" class="${dashboardPeriod()==='month'?'is-active':''}" onclick="setDGPeriod('month')">Mois</button><button aria-pressed="${dashboardPeriod()==='week'}" class="${dashboardPeriod()==='week'?'is-active':''}" onclick="setDGPeriod('week')">Semaine</button></div>`;}
+function dashboardPeriodButtons(){return`<div class="wa-mode-switch" role="group" aria-label="Période des performances"><button aria-pressed="${dashboardPeriod()==='week'}" class="${dashboardPeriod()==='week'?'is-active':''}" onclick="setDGPeriod('week')">Semaine</button><button aria-pressed="${dashboardPeriod()==='month'}" class="${dashboardPeriod()==='month'?'is-active':''}" onclick="setDGPeriod('month')">Mois</button></div>`;}
 function renderDashboardPerformance(cu,mKeys){return`<section id="dg-performance"><div class="performance-heading"><div class="st">Évolution de la production</div><div id="dg-period-buttons">${dashboardPeriodButtons()}</div></div><div id="dg-performance-content">${dashboardPerformanceContent(cu,mKeys)}</div></section>`;}
 function refreshDashboardPerformance(){
   const host=document.getElementById('dg-performance-content');if(!host)return false;
@@ -3742,9 +3781,15 @@ function pgDG(){
   const variationProduction=prod7-prod7Prec;
   const variationProductionPct=prod7Prec!==0?variationProduction/prod7Prec*100:null;
   const productionColor=variationProduction<0?'#e74c3c':variationProduction>0?'#36b37e':'#5a6778';
-  const poseObserved=cadencePoseObservee();
-  const poseSourceLabel=pilotage.poseRateSource==='planning'?'planning de fin':pilotage.poseRateSource==='manual'?'saisie manuelle':poseObserved>0?'médiane · jusqu’à 20 jours avec pose':'planning par défaut · données indisponibles';
-  const projectionColor=projection.date?(projection.deltaTarget>0?'#e74c3c':'#36b37e'):projection.networkDate?'#2c7be5':'#8a95a5';
+  const poseWeekly=projection.weeklyReference||weeklyProjectionReference();
+  const weeklyProjection=pilotage.poseRateSource==='data';
+  const weeklyHasValue=poseWeekly.available||poseWeekly.status==='zero';
+  const poseSourceLabel=pilotage.poseRateSource==='planning'?'simulation · ancienne référence':pilotage.poseRateSource==='manual'?'simulation · saisie manuelle':'production réelle · dernière semaine terminée';
+  const poseReferencePeriod=poseWeekly.from&&poseWeekly.to?`Du ${fD(poseWeekly.from)} au ${fD(poseWeekly.to)}`:'';
+  const poseReferenceValue=weeklyHasValue?fmt(poseWeekly.production)+' ml/semaine':'Non disponible';
+  const poseReferenceReason=poseWeekly.reason||'Semaine de référence non exploitable';
+  const projectionRateText=weeklyProjection?(projection.restePose<=0?'Pose achevée · aucune cadence nécessaire':`${poseReferenceValue} · ${poseSourceLabel}`):`${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}`;
+  const projectionColor=projection.date?(projection.deltaTarget===null?'#8a95a5':projection.deltaTarget>0?'#e74c3c':'#36b37e'):projection.networkDate?'#2c7be5':'#8a95a5';
 
   h+=`<div class="st">Pilotage & projection</div>`;
   h+=`<div class="kr" style="margin-bottom:16px">
@@ -3769,8 +3814,9 @@ function pgDG(){
     <div class="kc" style="border-left:4px solid ${projectionColor}">
       <div class="kl">${projectionUsesGCAllowance()?'Fin estimée · réseau + GC':projection.civilPending?'Fin du réseau estimée':hasCivil()?'Fin du périmètre suivi':'Fin de chantier calculée'}</div>
       <div class="kv" style="font-size:18px;color:${projectionColor}">${projection.date?fD(projection.date):projection.networkDate?fD(projection.networkDate):'Non estimée'}</div>
-      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires'+(projectionUsesGCAllowance()?' · dont 60 j de réserve GC':' · périmètre suivi'):projection.civilPending?'Fin globale à compléter · voir les hypothèses GC':'Date de calcul non définie'}</div>
-      <span class="kb ${projection.date?'bbl':'bo'}">Cadence de projection : ${fmt(projection.poseRate)} ml/j · ${poseSourceLabel}</span>
+      <div class="ksb">${projection.date?projection.totalDays+' jours calendaires'+(projectionUsesGCAllowance()?' · dont 60 j de réserve GC':' · périmètre suivi'):weeklyProjection&&projection.restePose>0&&!poseWeekly.available?escHtml(poseReferenceReason):projection.civilPending?'Fin globale à compléter · voir les hypothèses GC':'Date de calcul non définie'}</div>
+      <span class="kb ${projection.date?'bbl':'bo'}">Rythme de projection : ${projectionRateText}</span>
+      ${weeklyProjection&&poseReferencePeriod?`<div class="ksb">${poseReferencePeriod}</div>`:''}
     </div>
   </div>`;
 
@@ -3788,20 +3834,20 @@ function pgDG(){
         </div>
         <div class="projection-field"><label>Date de calcul / reprise</label>
           <select class="fi" id="pilotageRestartMode" onchange="togglePilotageInput(this,'pilotageRestartDate')">
-            <option value="data" ${pilotage.restartMode==='data'?'selected':''}>Lendemain du dernier rapport</option>
+            <option value="data" ${pilotage.restartMode==='data'?'selected':''}>Après le dernier rapport, au plus tôt aujourd’hui</option>
             <option value="undefined" ${pilotage.restartMode==='undefined'?'selected':''}>Non définie — chantier suspendu</option>
             <option value="date" ${pilotage.restartMode==='date'?'selected':''}>Simuler une reprise</option>
           </select>
           <input class="fi" type="date" id="pilotageRestartDate" value="${pilotage.restartDate||''}" style="display:${pilotage.restartMode==='date'?'block':'none'}">
         </div>
-        <div class="projection-field"><label>Source cadence de pose</label>
-          <select class="fi" id="pilotagePoseSource">
-            <option value="data" ${pilotage.poseRateSource==='data'?'selected':''}>Données réelles — médiane jours productifs</option>
-            <option value="planning" ${pilotage.poseRateSource==='planning'?'selected':''}>Planning — ${CADENCE_POSE_PLANNING} ml/j</option>
-            <option value="manual" ${pilotage.poseRateSource==='manual'?'selected':''}>Cadence manuelle</option>
+        <div class="projection-field"><label>Référence de production pour la projection</label>
+          <select class="fi" id="pilotagePoseSource" onchange="document.getElementById('pilotagePoseRate').style.display=this.value==='manual'?'block':'none'">
+            <option value="data" ${pilotage.poseRateSource==='data'?'selected':''}>Réel — dernière semaine terminée</option>
+            <option value="manual" ${pilotage.poseRateSource==='manual'?'selected':''}>Simulation — cadence manuelle (ml/j)</option>
+            <option value="planning" ${pilotage.poseRateSource==='planning'?'selected':''}>Simulation — ancienne référence ${CADENCE_POSE_PLANNING} ml/j</option>
           </select>
-          <input class="fi" type="number" min="0" step="1" id="pilotagePoseRate" value="${pilotage.manualPoseRate}">
-          <small>${poseObserved>0?`Référence réelle actuelle : ${fmt(poseObserved)} ml/j productif.`:'Référence réelle indisponible : repli provisoire sur le planning.'}</small>
+          <input class="fi" type="number" min="0" step="1" id="pilotagePoseRate" value="${pilotage.manualPoseRate}" aria-label="Cadence de simulation manuelle en mètres par jour" style="display:${pilotage.poseRateSource==='manual'?'block':'none'}">
+          <small>${poseReferencePeriod?poseReferencePeriod+' · ':''}${weeklyHasValue?'Production réelle : '+poseReferenceValue+'. ':''}${poseWeekly.available?'La production de la semaine entière, arrêts et dimanche compris, sert à la projection.':escHtml(poseReferenceReason)+'. Aucun rythme automatique de remplacement.'}</small>
         </div>
         <div class="projection-field"><label>Essais de pression (ml/j)</label><input class="fi" type="number" min="1" step="1" id="pilotageTestRate" value="${pilotage.testRate}"><small>Valeur initiale : 2 000 ml/j, à confirmer.</small></div>
         <div class="projection-field" ${projectionUsesGCAllowance()?'style="display:none"':''}><label>Reste GC calculé (équivalent-regard)</label><input class="fi" type="number" min="0" step="0.1" id="pilotageGcRemaining" value="${projection.gcRemaining.toFixed(1)}" readonly><small>Calculé automatiquement d’après les étapes saisies pour chaque regard.</small></div>
@@ -3815,9 +3861,9 @@ function pgDG(){
       </div>
       <div class="projection-result">
         <div><b>Reste calculé</b><span>${fmt(projection.restePose)} ml de pose · ${fmt(projection.resteEssais)} ml d’essais</span></div>
-        <div><b>Durées</b><span>Pose ${projection.poseDays??'—'} j · Essais ${projection.testDays??'—'} j${projectionUsesGCAllowance()?' · Réserve GC 60 j calendaires':hasCivil()?' · GC détaillés ci-dessous':` · Regards ${projection.gcDays} j`}</span></div>
+        <div><b>Durées</b><span>${weeklyProjection?'Pose '+(Number.isFinite(projection.poseWeeks)?projection.poseWeeks.toLocaleString('fr-FR',{maximumFractionDigits:2}):'—')+' semaine(s) au rythme observé':'Pose '+(projection.poseDays??'—')+' j en simulation'} · Essais ${projection.testDays??'—'} j${projectionUsesGCAllowance()?' · Réserve GC 60 j calendaires':hasCivil()?' · GC détaillés ci-dessous':` · Regards ${projection.gcDays} j`}</span></div>
         <div><b>Hypothèse d’enchaînement</b><span>${projectionUsesGCAllowance()?'Pose → essais → raccordements → rinçage → réserve GC fixe de 60 jours calendaires → récolement.':hasCivil()?'Pose → essais → raccordements → rinçage ; branches GC selon les débuts renseignés ; récolement après la dernière branche.':'Pose → essais → raccordements → rinçage ; regards en parallèle ; récolement en clôture.'}</span></div>
-        ${projection.requiredPoseRate!==null?`<div><b>Cadence pose nécessaire</b><span>${fmt(projection.requiredPoseRate)} ml/j${projection.requiredIncrease!==null?` · ${projection.requiredIncrease>0?'+':''}${projection.requiredIncrease.toFixed(1)}% vs cadence retenue`:''}</span></div>`:''}
+        ${(weeklyProjection?Number.isFinite(projection.requiredPoseWeeklyRate):projection.requiredPoseRate!==null)?`<div><b>${weeklyProjection?'Production hebdomadaire nécessaire':'Cadence pose nécessaire en simulation'}</b><span>${fmt(weeklyProjection?projection.requiredPoseWeeklyRate:projection.requiredPoseRate)} ${weeklyProjection?'ml/semaine':'ml/j'}${projection.requiredIncrease!==null?` · ${projection.requiredIncrease>0?'+':''}${projection.requiredIncrease.toFixed(1)}% vs rythme retenu`:''}</span></div>`:''}
         ${projection.targetImpossibleReason?`<div class="projection-warning"><b>${projection.civilPending?'Projection globale incomplète':'Cible impossible avec ces hypothèses'}</b><span>${projection.targetImpossibleReason}</span></div>`:''}
       </div>
       ${renderProjectionGC(pilotage)}
@@ -4295,7 +4341,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.9.4 — supervision en lecture seule, 23/10/2026' ,
+      version_app:'2.9.5 — projection sur production hebdomadaire, 23/10/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -5097,7 +5143,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.4');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.5');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
@@ -5452,8 +5498,8 @@ function projectionEffectiveSettings(raw){
   p.workingDays=[5,6,7].includes(+raw.workingDays)?+raw.workingDays:(ACTIVE_PROJECT_ID==='b1e9630e-5924-4cbc-996a-c35c122748e0'?6:7);
   if(raw.targetMode==='planning'){p.targetDate=contractPlanningDeadline();p.targetMode=p.targetDate?'date':'undefined';}
   if(raw.restartMode==='data'){
-    const last=dbDates().sort().at(-1);p.restartDate=last?addCalendarDays(last,1):'';
-    p.restartMode=p.restartDate?'date':'undefined';
+    const now=today(),last=dbDates().filter(d=>projectionDateValid(d)&&d<=now).sort().at(-1),next=last?addCalendarDays(last,1):now;
+    p.restartDate=next>now?next:now;p.restartMode='date';
   }
   return p;
 }
@@ -5495,11 +5541,11 @@ function readProjectionGC(settings){
 const projectionBaseWithoutCivil=projectionCadencesBeforeCivil;
 projectionCadences=function(synth,raw){
   const settings=projectionEffectiveSettings(raw),p=projectionBaseWithoutCivil(synth,settings);
-  p.baseDate=settings.restartDate||null;p.targetDate=settings.targetDate||null;
-  p.networkDate=null;p.gcRows=[];p.missingGC=[];p.civilPending=false;
+  p.baseDate=p.baseDate||null;p.targetDate=p.targetDate||null;
+  p.gcRows=[];p.missingGC=[];p.civilPending=false;
   // Les projets sans GC complémentaires conservent l’enchaînement historique.
   if(!hasCivil())return p;
-  p.networkDate=p.baseDate&&p.networkDays!==null?projectionWorkFinish(p.baseDate,p.networkDays,settings):null;
+  p.networkDate=p.networkDate||null;
   const cu=cumul(dbDates().sort().at(-1)||today());
   for(const row of projectionGCWorks(cu)){
     const config=projectionGCSettings(row,raw),remaining=config.remaining??(config.duration===null?null:config.duration*(1-row.progress));
@@ -5517,13 +5563,14 @@ projectionCadences=function(synth,raw){
   if(p.networkDate&&p.gcDate&&!p.civilPending){
     const worksEnd=p.networkDate>p.gcDate?p.networkDate:p.gcDate;
     p.date=+settings.recoDays>0?projectionWorkFinish(addCalendarDays(worksEnd,1),Math.ceil(settings.recoDays),settings):worksEnd;
-    p.totalDays=calendarDiff(p.baseDate,p.date)+1;
+    p.totalDays=p.networkDays===0&&p.gcRows.every(row=>row.progress>=1)&&!(+settings.recoDays>0)?0:calendarDiff(p.baseDate,p.date)+1;
     if(p.targetDate)p.deltaTarget=calendarDiff(p.targetDate,p.date);
   }
   // La cible et la date ne doivent pas annoncer une cadence suffisante si une branche GC reste inconnue.
   p.requiredPoseRate=null;p.requiredIncrease=null;p.targetImpossibleReason='';
   if(p.civilPending)p.targetImpossibleReason='Comparaison globale incomplète : hypothèses GC à compléter.';
   else if(p.gcDate&&p.targetDate&&p.gcDate>p.targetDate)p.targetImpossibleReason='La branche GC dépasse déjà l’échéance cible.';
+  if(p.weeklyMode)updateWeeklyRequiredProjection(p,settings);
   return p;
 };
 function projectionGCResults(p){
@@ -5541,15 +5588,16 @@ const projectionWithDetailedGC=projectionCadences;
 projectionCadences=function(synth,raw){
   if(!projectionUsesGCAllowance())return projectionWithDetailedGC(synth,raw);
   const settings=projectionEffectiveSettings(raw),p=projectionBaseWithoutCivil(synth,settings);
-  p.baseDate=settings.restartMode==='date'?settings.restartDate:null;p.targetDate=settings.targetMode==='date'?settings.targetDate:null;
+  p.baseDate=p.baseDate||null;p.targetDate=p.targetDate||null;
   p.gcRows=[];p.missingGC=[];p.civilPending=false;p.gcAllowanceDays=MITRELLI_GC_ALLOWANCE_DAYS;p.gcDays=MITRELLI_GC_ALLOWANCE_DAYS;
-  p.networkDate=p.baseDate&&p.networkDays!==null?projectionWorkFinish(p.baseDate,p.networkDays,settings):null;
+  p.networkDate=p.networkDate||null;
   p.gcDate=p.networkDate?addCalendarDays(p.networkDate,MITRELLI_GC_ALLOWANCE_DAYS):null;
   p.date=p.gcDate?(+settings.recoDays>0?projectionWorkFinish(addCalendarDays(p.gcDate,1),Math.ceil(settings.recoDays),settings):p.gcDate):null;
   p.totalDays=p.date?calendarDiff(p.baseDate,p.date)+1:null;
   p.deltaTarget=p.date&&p.targetDate?calendarDiff(p.targetDate,p.date):null;
   p.requiredPoseRate=null;p.requiredIncrease=null;p.targetImpossibleReason='';
-  if(p.baseDate&&p.targetDate){
+  if(p.weeklyMode)updateWeeklyRequiredProjection(p,settings,MITRELLI_GC_ALLOWANCE_DAYS);
+  else if(p.baseDate&&p.targetDate){
     // Reserve the fixed GC calendar allowance first, then count available working days.
     let gcDeadline=p.targetDate;
     if(+settings.recoDays>0){
