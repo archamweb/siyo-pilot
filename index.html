@@ -291,7 +291,7 @@ async function pushProjectConfigVersion(id,cfg,reason){
   const version=(rows?.[0]?.version||0)+1;let motif=version>1?String(reason||cfg.revisions?.at(-1)?.reason||'Mise à jour du paramétrage'):null;if(motif&&motif.length<8)motif+=' (révision)';
   const stored=cloneProjectConfig(cfg);const dqe=stored.finance?.dqe||null;if(stored.finance)stored.finance.dqe=null;
   const {error}=await sb.from('project_config').insert({project_id:id,version,config:stored,reason:motif,created_by:SESSION?.user?.id||null});
-  if(!error&&dqe&&canAccessFinance()){const {error:ef}=await sb.from('project_finance').upsert({project_id:id,dqe,updated_by:SESSION?.user?.id||null},{onConflict:'project_id'});if(ef){CONFIG_VERSIONS[id]=version;toast('Version technique enregistrée, mais DQE non enregistré : '+ef.message);return false;}}
+  if(!error&&dqe&&canWriteFinance()){const {error:ef}=await sb.from('project_finance').upsert({project_id:id,dqe,updated_by:SESSION?.user?.id||null},{onConflict:'project_id'});if(ef){CONFIG_VERSIONS[id]=version;toast('Version technique enregistrée, mais DQE non enregistré : '+ef.message);return false;}}
   if(error)toast('Configuration non enregistrée : '+error.message);
   else{CONFIG_VERSIONS[id]=version;PROJECT_CONFIG_CACHE[id]=cloneProjectConfig(cfg);auditLog('config.revise',`v${version}`,{reason:motif,total:projectConfigTotal(cfg)});await sb.from('projects').update({name:cfg.identity?.name,short_name:cfg.identity?.shortName,client:cfg.identity?.client,moe:cfg.identity?.owner,contractor:cfg.identity?.company,status:cfg.identity?.targetStatus||'preparation'}).eq('id',id);}
   return !error;
@@ -742,7 +742,7 @@ let DB_VERSIONS={};
 // Historique : données conservées côté serveur, brouillons et envois en attente côté appareil.
 let REPORT_HISTORY=null,HISTORY_REQUEST=0;
 const REPORT_PENDING_MEMORY=new Map();
-function canReadReportHistory(){return canWrite();}
+function canReadReportHistory(){return canWrite()||currentRole()==='supervision';}
 function reportRevisionReason(){return (document.getElementById('revision_reason')?.value||'').trim();}
 function recreationReasonForm(){return `<div class="cd report-revision-reason"><input type="hidden" id="report_recreation_required" value="1"><label class="fl" for="revision_reason">Motif de recréation — obligatoire</label><textarea class="fi" id="revision_reason" rows="2" minlength="8" maxlength="1000" placeholder="Expliquez pourquoi ce rapport supprimé doit être recréé"></textarea><div class="saisie-note">La suppression et les anciennes versions restent dans l’historique.</div></div>`;}
 function renderRevisionReason(ex){const content=ex||DB_VERSIONS[SD]
@@ -894,7 +894,7 @@ function auditLog(action,target,after){try{if(!isConfigured())return;sb.from('au
 async function syncSave(d,data){
   if(!d.startsWith('__'))return saveReportWithHistory(d,data);
   if(!canWrite()){toast('Lecture seule : ce rôle ne peut pas enregistrer.');return false;}
-  if(d==='__finance_summary__'&&!canAccessFinance()){toast('Synthèse financière réservée à la direction et au conducteur de travaux.');return false;}
+  if(d==='__finance_summary__'&&!canWriteFinance()){toast('Synthèse financière réservée à la direction et au conducteur de travaux.');return false;}
   if(!isConfigured()){toast('Non connecté à la base : rien n’a été enregistré.');return false;}
   if(syncing){toast('Un enregistrement est déjà en cours.');return false;}
   const pid=ACTIVE_PROJECT_ID;syncing=true;
@@ -1202,7 +1202,7 @@ function syntheseFinanciereValidee(){
 }
 function avancementFinancier(){const live=syntheseFinanciereValidee()?.taux;if(Number.isFinite(live))return live;const shared=db?.__finance_summary__;return Number.isFinite(+shared?.taux)?+shared.taux:null;}
 function financeSummaryPayload(){const s=syntheseFinanciereValidee();if(!s)return null;return{taux:Math.round(s.taux*100)/100,period:{key:s.period.key,number:s.period.number||null,label:s.period.label||attachMonthLabel(s.period.key)},updatedAt:new Date().toISOString(),dt:'__finance_summary__'};}
-async function publishFinanceSummary(){if(!isConfigured()||!canAccessFinance())return;const next=financeSummaryPayload(),cur=db?.__finance_summary__;if(!next){if(cur)await syncDel('__finance_summary__');return;}if(cur&&cur.taux===next.taux&&cur.period?.key===next.period.key)return;await syncSave('__finance_summary__',next);}
+async function publishFinanceSummary(){if(!isConfigured()||!canWriteFinance())return;const next=financeSummaryPayload(),cur=db?.__finance_summary__;if(!next){if(cur)await syncDel('__finance_summary__');return;}if(cur&&cur.taux===next.taux&&cur.period?.key===next.period.key)return;await syncSave('__finance_summary__',next);}
 
 // La mobilisation est lue dans l'attachement et reste extérieure à l'indice physique.
 // Dispersion 1B conserve provisoirement la valeur historique demandée par le chef de projet.
@@ -1521,12 +1521,13 @@ let PARAM_SECTION='identity',PARAM_SELECTED_LOC=PROJECT_CONFIG.localities?.[0]?.
 // Contexte provisoire de démonstration. La restriction définitive devra être
 // contrôlée côté serveur, pas uniquement par l'affichage de cet onglet.
 let CURRENT_USER_CONTEXT={role:'visiteur',label:'Visiteur'};
-const ROLE_LABELS={direction:'Direction de projet',chef_projet:'Chef de projet',conducteur_travaux:'Conducteur de travaux',chef_chantier:'Chef de chantier',agent:'Agent de saisie',lecteur:'Lecteur',visiteur:'Visiteur',admin:'Administrateur SIYO'};
+const ROLE_LABELS={direction:'Direction de projet',chef_projet:'Chef de projet',conducteur_travaux:'Conducteur de travaux',chef_chantier:'Chef de chantier',agent:'Agent de saisie',lecteur:'Lecteur',visiteur:'Visiteur',supervision:'Supervision · lecture seule',admin:'Administrateur SIYO'};
 function isAdminUser(){return !!PROFILE?.is_admin;}
 function canManagePilotage(){return isAdminUser()||['direction','chef_projet','conducteur_travaux'].includes(currentRole());}
 function currentRole(){return CURRENT_USER_CONTEXT.role;}
 function canAccessProjectSetup(){return isAdminUser()||currentRole()==='direction';}
-function canAccessFinance(){return isAdminUser()||['direction','conducteur_travaux'].includes(currentRole());}
+function canWriteFinance(){return isAdminUser()||['direction','conducteur_travaux'].includes(currentRole());}
+function canAccessFinance(){return canWriteFinance()||currentRole()==='supervision';}
 function canWrite(){return isAdminUser()||['direction','chef_projet','agent','conducteur_travaux','chef_chantier'].includes(currentRole());}
 function refreshUserContext(){const m=MEMBERSHIPS.find(x=>x.project_id===ACTIVE_PROJECT_ID);const role=m?.role||(isAdminUser()?'admin':'visiteur');CURRENT_USER_CONTEXT={role,label:ROLE_LABELS[role]||role};}
 let DG_ACT_PIVOT='r'; // Activité affichée dans le tableau pivot mensuel par localité: s/f/r/ess
@@ -1677,7 +1678,7 @@ const PERSONAL_PASSWORD_USER_ID='47e32d2c-4b58-4eb7-b15a-4b78a62d0875';
 const PERSONAL_PASSWORD_MARKER='siyo_personal_password_changed_at';
 let PERSONAL_PASSWORD_OPEN=false,PERSONAL_PASSWORD_BUSY=false,PERSONAL_PASSWORD_MESSAGE='',PERSONAL_PASSWORD_MESSAGE_KIND='',PERSONAL_PASSWORD_CURRENT_REQUIRED=false;
 let PERSONAL_PASSWORD_INVITED_SESSION='';
-function personalPasswordEnabled(user=SESSION?.user){return user?.id===PERSONAL_PASSWORD_USER_ID;}
+function personalPasswordEnabled(user=SESSION?.user){return user?.id===PERSONAL_PASSWORD_USER_ID||user?.app_metadata?.siyo_personal_password===true;}
 function personalPasswordChanged(user=SESSION?.user){return personalPasswordEnabled(user)&&typeof user.user_metadata?.[PERSONAL_PASSWORD_MARKER]==='string'&&!!user.user_metadata[PERSONAL_PASSWORD_MARKER];}
 function personalPasswordSessionKey(user=SESSION?.user){return user?.id+':'+(user?.last_sign_in_at||SESSION?.expires_at||'active-session');}
 function personalPasswordInvite(){
@@ -1834,9 +1835,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.3</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.4</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.3</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.4</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button>
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
@@ -4294,7 +4295,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.9.3 — effectifs par métier, 22/10/2026' ,
+      version_app:'2.9.4 — supervision en lecture seule, 23/10/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4359,23 +4360,23 @@ let ATTACH_VIEW='summary',ATTACH_SELECTED_LOT='oume',ATTACH_DQE_LOT='oume',ATTAC
 function defaultAttachDraft(){return{createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),source:'N°08 — Rev03',lots:Object.fromEntries(ATTACHMENT_REFERENCE.lots.map(r=>[r.id,{month:r.month,reason:''}])),dqe:{}};}
 function loadAttachDraft(){try{return JSON.parse(localStorage.getItem(scopedStorageKey(ATTACH_DRAFT_KEY))||'null');}catch(e){return null;}}
 let ATTACH_DRAFT=loadAttachDraft();
-function persistAttachDraft(){ATTACH_DRAFT.updatedAt=new Date().toISOString();localStorage.setItem(scopedStorageKey(ATTACH_DRAFT_KEY),JSON.stringify(ATTACH_DRAFT));}
+function persistAttachDraft(){if(!canWriteFinance())return;ATTACH_DRAFT.updatedAt=new Date().toISOString();localStorage.setItem(scopedStorageKey(ATTACH_DRAFT_KEY),JSON.stringify(ATTACH_DRAFT));}
 function draftAttachmentReference(){
   const draft=ATTACH_DRAFT||defaultAttachDraft();
   return{...ATTACHMENT_REFERENCE,revision:'Brouillon local',status:'draft',previousReference:'Situation validée N°08 — août 2026',lots:ATTACHMENT_REFERENCE.lots.map(r=>{const d=draft.lots?.[r.id]||{};const month=Number.isFinite(+d.month)?+d.month:r.month;return{...r,previous:r.previous,month,cumulative:r.previous+month,draftReason:d.reason||''};})};
 }
-function startAttachmentDraft(){if(!ATTACH_DRAFT){ATTACH_DRAFT=defaultAttachDraft();persistAttachDraft();}ATTACH_MODE='draft';ATTACH_VIEW='draft';draw();toast('Brouillon local ouvert — la situation validée reste intacte');}
+function startAttachmentDraft(){if(!canWriteFinance())return;if(!ATTACH_DRAFT){ATTACH_DRAFT=defaultAttachDraft();persistAttachDraft();}ATTACH_MODE='draft';ATTACH_VIEW='draft';draw();toast('Brouillon local ouvert — la situation validée reste intacte');}
 function showAttachmentReference(){ATTACH_MODE='reference';ATTACH_VIEW='summary';draw();}
-function stageAttachDraftLot(id,field,value){
+function stageAttachDraftLot(id,field,value){if(!canWriteFinance())return;
   if(!ATTACH_DRAFT)ATTACH_DRAFT=defaultAttachDraft();
   if(!ATTACH_DRAFT.lots[id])ATTACH_DRAFT.lots[id]={month:0,reason:''};
   if(field==='month'){const n=Number(String(value).replace(',','.'));ATTACH_DRAFT.lots[id].month=Number.isFinite(n)?n:0;}
   else ATTACH_DRAFT.lots[id].reason=String(value||'').trim();
   persistAttachDraft();
 }
-function updateAttachDraftLot(id,field,value){stageAttachDraftLot(id,field,value);draw();}
+function updateAttachDraftLot(id,field,value){if(!canWriteFinance())return;stageAttachDraftLot(id,field,value);draw();}
 function draftDqeLines(){const d=ATTACH_DRAFT||defaultAttachDraft();return ATTACH_DQE_LINES.map(l=>{const q=Number.isFinite(+d.dqe?.[l.key])?+d.dqe[l.key]:l.qty;return{...l,proposedQty:q,amount:Math.round(q*l.pu)};});}
-function stageAttachDqeLine(key,value){if(!ATTACH_DRAFT)ATTACH_DRAFT=defaultAttachDraft();if(!ATTACH_DRAFT.dqe)ATTACH_DRAFT.dqe={};const n=Number(String(value).replace(',','.'));ATTACH_DRAFT.dqe[key]=Number.isFinite(n)?n:0;persistAttachDraft();}
+function stageAttachDqeLine(key,value){if(!canWriteFinance())return;if(!ATTACH_DRAFT)ATTACH_DRAFT=defaultAttachDraft();if(!ATTACH_DRAFT.dqe)ATTACH_DRAFT.dqe={};const n=Number(String(value).replace(',','.'));ATTACH_DRAFT.dqe[key]=Number.isFinite(n)?n:0;persistAttachDraft();}
 function setAttachDqeLot(id){ATTACH_DQE_LOT=id;draw();}
 function setAttachView(view){ATTACH_VIEW=view;draw();}
 function setAttachLot(id){ATTACH_SELECTED_LOT=id;draw();}
@@ -4497,7 +4498,7 @@ async function loadAttachLedgerRemote(){
   const keys=Object.keys(ledger.periods).sort();ledger.selected=keys.at(-1)||'';ATTACH_XLS=ledger;
 }
 async function saveAttachLedger(){
-  if(!isConfigured()||!canAccessFinance()){toast('Attachements réservés à la direction et au conducteur de travaux.');return false;}
+  if(!isConfigured()||!canWriteFinance()){toast('Lecture seule : modification des attachements réservée à la direction et au conducteur de travaux.');return false;}
   const pending=Object.values(ATTACH_XLS.periods||{}).filter(p=>!(p._persisted&&p.status==='validated'));
   const rows=pending.map(p=>({project_id:ACTIVE_PROJECT_ID,period:p.key,number:p.number||null,status:p.status==='validated'?'validated':'draft',ledger:{...p,_updated:undefined,_persisted:undefined},validated_by:p.status==='validated'?SESSION.user.id:null,validated_at:p.status==='validated'?new Date().toISOString():null}));
   if(!rows.length){await publishFinanceSummary();return true;}
@@ -4521,20 +4522,20 @@ function dqeAutoMapping(rows){
 }
 function dqeDetailSheetNames(){return(DQE_IMPORT?.sheetNames||[]).filter(name=>!/recap/i.test(dqeNorm(name)));}
 function dqeCurrentRows(){if(!DQE_IMPORT)return[];const name=DQE_IMPORT.sheetName==='__all_detail__'?dqeDetailSheetNames()[0]:DQE_IMPORT.sheetName;return DQE_IMPORT.sheets[name]||[];}
-async function loadDqeFile(input){
+async function loadDqeFile(input){if(!canWriteFinance())return;
   const file=input?.files?.[0];if(!file)return;if(!window.XLSX){alert('Le module de lecture Excel est indisponible. Rechargez le fichier avec une connexion Internet.');return;}
   try{const buffer=await file.arrayBuffer(),wb=XLSX.read(buffer,{type:'array',cellDates:false}),sheets={};wb.SheetNames.forEach(name=>sheets[name]=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,raw:true,defval:''}));const detailNames=wb.SheetNames.filter(name=>!/recap/i.test(dqeNorm(name))),sheetName=detailNames.length>1?'__all_detail__':wb.SheetNames[0],sample=sheets[detailNames[0]||sheetName]||[];DQE_IMPORT={fileName:file.name,sheetNames:wb.SheetNames,sheets,sheetName,periodKey:(PROJECT_CONFIG.identity?.startDate||today()).slice(0,7),mapping:dqeAutoMapping(sample)};draw();toast('DQE lu — vérifiez les colonnes avant validation');}catch(err){console.error(err);alert('Lecture du DQE impossible : '+err.message);}finally{input.value='';}
 }
-function setDqeSheet(name){if(!DQE_IMPORT||(name!=='__all_detail__'&&!DQE_IMPORT.sheets?.[name]))return;DQE_IMPORT.sheetName=name;DQE_IMPORT.mapping=dqeAutoMapping(dqeCurrentRows());draw();}
-function setDqeMapping(key,value){if(!DQE_IMPORT)return;DQE_IMPORT.mapping[key]=+value;draw();}
-function setDqeHeaderRow(value){if(!DQE_IMPORT)return;const rows=dqeCurrentRows(),headerRow=Math.max(0,+value-1),headers=rows[headerRow]||[],find=patterns=>headers.findIndex(h=>patterns.some(p=>p.test(dqeNorm(h))));DQE_IMPORT.mapping={headerRow,no:find([/^n( |$)/,/numero/,/prix n/]),designation:find([/designation/,/libelle/,/description/]),unit:find([/unite/]),qty:find([/quantite/,/^qte/]),unitPrice:find([/prix unitaire/,/^pu$/,/p u/]),section:find([/lot/,/section/,/chapitre/])};draw();}
+function setDqeSheet(name){if(!canWriteFinance())return;if(!DQE_IMPORT||(name!=='__all_detail__'&&!DQE_IMPORT.sheets?.[name]))return;DQE_IMPORT.sheetName=name;DQE_IMPORT.mapping=dqeAutoMapping(dqeCurrentRows());draw();}
+function setDqeMapping(key,value){if(!canWriteFinance())return;if(!DQE_IMPORT)return;DQE_IMPORT.mapping[key]=+value;draw();}
+function setDqeHeaderRow(value){if(!canWriteFinance())return;if(!DQE_IMPORT)return;const rows=dqeCurrentRows(),headerRow=Math.max(0,+value-1),headers=rows[headerRow]||[],find=patterns=>headers.findIndex(h=>patterns.some(p=>p.test(dqeNorm(h))));DQE_IMPORT.mapping={headerRow,no:find([/^n( |$)/,/numero/,/prix n/]),designation:find([/designation/,/libelle/,/description/]),unit:find([/unite/]),qty:find([/quantite/,/^qte/]),unitPrice:find([/prix unitaire/,/^pu$/,/p u/]),section:find([/lot/,/section/,/chapitre/])};draw();}
 function dqeMappedLines(){
   if(!DQE_IMPORT)return[];const names=DQE_IMPORT.sheetName==='__all_detail__'?dqeDetailSheetNames():[DQE_IMPORT.sheetName];let serial=0,all=[];
   names.forEach(name=>{const rows=DQE_IMPORT.sheets[name]||[],m=DQE_IMPORT.sheetName==='__all_detail__'?dqeAutoMapping(rows):(DQE_IMPORT.mapping||{});let currentSection=DQE_IMPORT.sheetName==='__all_detail__'?name:'DQE';rows.slice((m.headerRow||0)+1).forEach((row,i)=>{const designation=cleanText(row[m.designation]||'',300),unit=cleanText(m.unit>=0?row[m.unit]:'',30),qty=dqeNumber(row[m.qty]),unitPrice=dqeNumber(row[m.unitPrice]),section=cleanText(m.section>=0?row[m.section]:'',120),base={id:`L${String(++serial).padStart(4,'0')}`,no:cleanText(m.no>=0?row[m.no]:'',40),designation,unit,section:currentSection,sourceSheet:name,sourceRow:(m.headerRow||0)+i+2};if(section)currentSection=section;if(dqeHeadingLike(designation,unit,qty,unitPrice))all.push({...base,kind:'heading',section:currentSection,marketQty:null,unitPrice:null});else if(designation&&qty!==null&&unitPrice!==null)all.push({...base,kind:'line',section:currentSection,marketQty:qty,unitPrice});else serial--;});});return all;
 }
 function cancelDqeImport(){DQE_IMPORT=null;draw();}
 async function validateDqeImport(){
-  if(!DQE_IMPORT||!canAccessFinance()||CONFIG_SAVING)return;
+  if(!DQE_IMPORT||!canWriteFinance()||CONFIG_SAVING)return;
   if(Object.keys(ATTACH_XLS.periods||{}).length){alert('Des attachements existent déjà. Le remplacement du DQE nécessite une révision dédiée pour préserver leurs références.');return;}
   const lines=dqeMappedLines(),financial=lines.filter(l=>!dqeIsHeadingLine(l));
   if(!financial.length||financial.some(l=>!Number.isFinite(l.marketQty)||!Number.isFinite(l.unitPrice)||l.marketQty<0||l.unitPrice<0)){alert('Vérifiez les lignes chiffrées, quantités et prix du DQE.');return;}
@@ -4630,17 +4631,17 @@ function xlsLotFinancial(period,row){
   const b=baseRow?xlsLineValues(period,lotId,baseRow.r,memo):Array(12).fill(0),a=amRow?xlsLineValues(period,lotId,amRow.r,memo):Array(12).fill(0);
   return{baseMarket:+(b[4]||row.baseMarket||0),basePrevious:+(b[8]||0),baseMonth:+(b[9]||0),baseCumulative:+(b[10]||0),amendMarket:+(a[4]||row.amendMarket||0),amendPrevious:+(a[8]||0),amendMonth:+(a[9]||0),amendCumulative:+(a[10]||0)};
 }
-function createNextContractAttachment(){
+function createNextContractAttachment(){if(!canWriteFinance())return;
   const periods=Object.values(ATTACH_XLS.periods),draft=periods.find(p=>p.status==='draft');if(draft){ATTACH_XLS.selected=draft.key;ATTACH_XLS_LEVEL='recap';saveAttachLedger();draw();toast(`Brouillon N°${String(draft.number).padStart(2,'0')} déjà ouvert`);return;}
   const last=periods.filter(p=>p.status==='validated').sort((a,b)=>a.key.localeCompare(b.key)).at(-1),key=nextAttachMonth(last.key);
   ATTACH_XLS.periods[key]={key,number:last.number+1,label:attachMonthLabel(key),revision:'Brouillon',status:'draft',cutoff:endOfAttachMonth(key),previous:last.key,values:{},manual:{}};ATTACH_XLS.selected=key;ATTACH_XLS_LEVEL='recap';ATTACH_XLS_EDIT=false;saveAttachLedger();draw();toast(`Attachement N°${String(last.number+1).padStart(2,'0')} créé à partir du N°${String(last.number).padStart(2,'0')}`);
 }
-function selectContractAttachment(key){if(ATTACH_XLS.periods[key]){ATTACH_XLS.selected=key;ATTACH_XLS_LEVEL='recap';ATTACH_XLS_EDIT=false;saveAttachLedger();draw();}}
-function openContractLot(id,edit=false){ATTACH_XLS_LOT=id;ATTACH_XLS_LEVEL='lot';ATTACH_XLS_EDIT=edit&&activeAttachPeriod().status==='draft';draw();window.scrollTo(0,0);}
+function selectContractAttachment(key){if(ATTACH_XLS.periods[key]){ATTACH_XLS.selected=key;ATTACH_XLS_LEVEL='recap';ATTACH_XLS_EDIT=false;draw();}}
+function openContractLot(id,edit=false){ATTACH_XLS_LOT=id;ATTACH_XLS_LEVEL='lot';ATTACH_XLS_EDIT=canWriteFinance()&&edit&&activeAttachPeriod().status==='draft';draw();window.scrollTo(0,0);}
 function backToContractRecap(){ATTACH_XLS_LEVEL='recap';ATTACH_XLS_EDIT=false;draw();window.scrollTo(0,0);}
-function stageContractQty(lotId,row,value){const p=activeAttachPeriod(),ref=xlsRow(lotId,row);if(p.status!=='draft'||xlsIsGrillageRow(ref))return;const n=Number(String(value).replace(',','.'));p.values[attachRowKey(lotId,row)]=Number.isFinite(n)?n:0;p.manual[attachRowKey(lotId,row)]=true;saveAttachLedger();}
-function resetContractQty(lotId,row){const p=activeAttachPeriod(),key=attachRowKey(lotId,row);if(p.status!=='draft')return;delete p.values[key];delete p.manual[key];saveAttachLedger();draw();toast('Formule automatique rétablie');}
-function beginContractAdjustment(lotId){
+function stageContractQty(lotId,row,value){if(!canWriteFinance())return;const p=activeAttachPeriod(),ref=xlsRow(lotId,row);if(p.status!=='draft'||xlsIsGrillageRow(ref))return;const n=Number(String(value).replace(',','.'));p.values[attachRowKey(lotId,row)]=Number.isFinite(n)?n:0;p.manual[attachRowKey(lotId,row)]=true;saveAttachLedger();}
+function resetContractQty(lotId,row){if(!canWriteFinance())return;const p=activeAttachPeriod(),key=attachRowKey(lotId,row);if(p.status!=='draft')return;delete p.values[key];delete p.manual[key];saveAttachLedger();draw();toast('Formule automatique rétablie');}
+function beginContractAdjustment(lotId){if(!canWriteFinance())return;
   const p=activeAttachPeriod();
   if(p.status==='validated'){
     const laterValidated=Object.values(ATTACH_XLS.periods).some(x=>x.key>p.key&&x.status==='validated');
@@ -4651,7 +4652,7 @@ function beginContractAdjustment(lotId){
   }
   ATTACH_XLS_LOT=lotId||ATTACH_XLS_LOT||'oume';ATTACH_XLS_LEVEL=ATTACH_XLS.mode==='generic'?'recap':'lot';ATTACH_XLS_EDIT=true;saveAttachLedger();draw();window.scrollTo(0,0);
 }
-async function validateContractAttachment(){
+async function validateContractAttachment(){if(!canWriteFinance())return;
   const p=activeAttachPeriod();if(p.status!=='draft')return;const snapshot=JSON.stringify(p);if(!confirm(`Valider l'attachement N°${String(p.number).padStart(2,'0')} ? Les cumuls deviendront les précédents du mois suivant.`))return;
   if(ATTACH_XLS.mode==='generic')(PROJECT_CONFIG.finance?.dqe?.lines||[]).filter(l=>!dqeIsHeadingLine(l)).forEach(line=>p.values[line.id]=genericAttachmentLineValues(p,line).cumulative);else Object.keys(ATTACH_EXCEL_LOTS).forEach(lotId=>xlsRows(lotId).filter(r=>xlsIsLeaf(lotId,r)).forEach(r=>{p.values[attachRowKey(lotId,r.r)]=xlsLineValues(p,lotId,r.r,new Map())[7];}));p.status='validated';p.revision='Validé';p.validatedAt=new Date().toISOString();ATTACH_XLS_EDIT=false;
   const ok=await saveAttachLedger();
@@ -4752,13 +4753,14 @@ function renderContractRecap(period){
 }
 function xlsRowClass(label){label=String(label||'').trim();if(/A T T A C H E M E N T.*AVENANT/i.test(label)||/^LOT \d.*PHASE/i.test(label))return'xls-band-orange';if(/^FORFAITS GENERAUX/i.test(label))return'xls-band-yellow';if(/^POSE DE CANALISATIONS|^TOTAL POSE/i.test(label))return'xls-band-peach';if(/^GENIE CIVIL|^TOTAL GENIE CIVIL/i.test(label))return'xls-band-purple';if(/^TERRASSEMENTS|^TOTAL TERRASSEMENTS/i.test(label))return'xls-band-green';if(/^INSTALLATION DE CHANTIER|^TOTAL INSTALLATION/i.test(label))return'xls-band-blue';if(/^MONTANT MARCHE/i.test(label))return'xls-band-gray';if(/^TOTAL /i.test(label))return'xls-subtotal';return'';}
 function renderContractLot(period,lotId){
-  const lot=LOC.find(l=>l.id===lotId),rows=xlsRows(lotId),last=xlsLastDisplayRow(lotId),memo=new Map(),editable=period.status==='draft'&&ATTACH_XLS_EDIT;
-  let h=`<div class="xls-lot-toolbar no-print"><button class="bt" onclick="backToContractRecap()">← Retour au récapitulatif</button><div>${editable?'<button class="bp" onclick="ATTACH_XLS_EDIT=false;draw()">✓ Enregistrer les ajustements</button>':`<button class="bp" onclick="beginContractAdjustment('${lotId}')">✎ Ajustement pour validation</button>`}${period.status==='validated'?'<span class="xls-locked">🔒 Feuille validée</span>':''}</div></div><div class="xls-scroll"><table class="xls-sheet xls-detail"><colgroup><col style="width:290px"><col style="width:58px"><col style="width:82px"><col style="width:95px"><col style="width:110px"><col style="width:88px"><col style="width:88px"><col style="width:88px"><col style="width:115px"><col style="width:115px"><col style="width:115px"><col style="width:75px"></colgroup><thead><tr><th rowspan="2">DÉSIGNATION</th><th rowspan="2">UNITÉ</th><th colspan="3">MARCHÉ</th><th colspan="3">QUANTITÉS EXÉCUTÉES</th><th colspan="3">MONTANTS EN HT</th><th rowspan="2">Taux financier<br>d'exécution</th></tr><tr><th>QUANTITÉ</th><th>PRIX<br>UNITAIRE</th><th>PRIX TOTAL</th><th>Précédent</th><th class="xls-month">Mois<br><small>(calculé)</small></th><th>Cumul${editable?'<br><small>(ajustable)</small>':''}</th><th>Précédent</th><th class="xls-month">Mois</th><th>Cumul</th></tr></thead><tbody>`;
+  const lot=LOC.find(l=>l.id===lotId),rows=xlsRows(lotId),last=xlsLastDisplayRow(lotId),memo=new Map(),editable=canWriteFinance()&&period.status==='draft'&&ATTACH_XLS_EDIT;
+  let h=`<div class="xls-lot-toolbar no-print"><button class="bt" onclick="backToContractRecap()">← Retour au récapitulatif</button><div>${canWriteFinance()?(editable?'<button class="bp" onclick="ATTACH_XLS_EDIT=false;draw()">✓ Enregistrer les ajustements</button>':`<button class="bp" onclick="beginContractAdjustment('${lotId}')">✎ Ajustement pour validation</button>`):'<span class="xls-locked">Consultation uniquement</span>'}${period.status==='validated'?'<span class="xls-locked">🔒 Feuille validée</span>':''}</div></div><div class="xls-scroll"><table class="xls-sheet xls-detail"><colgroup><col style="width:290px"><col style="width:58px"><col style="width:82px"><col style="width:95px"><col style="width:110px"><col style="width:88px"><col style="width:88px"><col style="width:88px"><col style="width:115px"><col style="width:115px"><col style="width:115px"><col style="width:75px"></colgroup><thead><tr><th rowspan="2">DÉSIGNATION</th><th rowspan="2">UNITÉ</th><th colspan="3">MARCHÉ</th><th colspan="3">QUANTITÉS EXÉCUTÉES</th><th colspan="3">MONTANTS EN HT</th><th rowspan="2">Taux financier<br>d'exécution</th></tr><tr><th>QUANTITÉ</th><th>PRIX<br>UNITAIRE</th><th>PRIX TOTAL</th><th>Précédent</th><th class="xls-month">Mois<br><small>(calculé)</small></th><th>Cumul${editable?'<br><small>(ajustable)</small>':''}</th><th>Précédent</th><th class="xls-month">Mois</th><th>Cumul</th></tr></thead><tbody>`;
   rows.filter(r=>r.r>=7&&r.r<=last).forEach(r=>{const v=xlsLineValues(period,lotId,r.r,memo),label=String(v[0]||''),cls=xlsRowClass(label),leaf=xlsIsLeaf(lotId,r),lockedFormula=xlsIsGrillageRow(r),formulaLine=xlsUsesPoseRatio(lotId,r),manual=!!period.manual?.[attachRowKey(lotId,r.r)],auto=(formulaLine&&!manual)||lockedFormula,cumulCell=editable&&leaf&&!lockedFormula?`<span class="xls-adjust-wrap"><input class="xls-adjust-input" type="number" step="0.001" value="${+v[7]||0}" title="${auto?'Cumul calculé à partir du taux du grillage avertisseur — ajustable pour validation':'Cumul ajustable pour cet attachement'}" oninput="stageContractQty('${lotId}',${r.r},this.value)" onchange="draw()">${manual?`<button type="button" class="xls-reset-auto" title="Rétablir le cumul automatique" onclick="resetContractQty('${lotId}',${r.r})">↺</button>`:''}</span>`:`<span class="${lockedFormula?'xls-formula-locked':''}">${xlsFmt(v[7],7)}${lockedFormula?' 🔒':''}</span>`;h+=`<tr class="${cls}"><td>${escHtml(label)}${lockedFormula?'<small class="xls-auto-note">somme automatique des conduites posées par DN</small>':auto?'<small class="xls-auto-note">cumul lié au grillage avertisseur</small>':manual?'<small class="xls-manual-note">cumul ajusté manuellement</small>':''}</td><td>${xlsFmt(v[1],1)}</td><td class="nr">${xlsFmt(v[2],2)}</td><td class="nr">${xlsFmt(v[3],3)}</td><td class="nr">${xlsFmt(v[4],4)}</td><td class="nr">${xlsFmt(v[5],5)}</td><td class="nr xls-month">${xlsFmt(v[6],6)}</td><td class="nr ${editable&&leaf&&!lockedFormula?'xls-editing':''}">${cumulCell}</td><td class="nr">${xlsFmt(v[8],8)}</td><td class="nr xls-month">${xlsFmt(v[9],9)}</td><td class="nr">${xlsFmt(v[10],10)}</td><td class="nr">${xlsFmt(v[11],11)}</td></tr>`;});
   return h+`</tbody></table></div><div class="xls-formula-note"><b>Règle de validation :</b> le cumul des conduites est ajustable par DN. Le grillage avertisseur est verrouillé et suit leur somme. La quantité du mois est toujours <b>Cumul − Précédent</b> ; les volumes liés, montants et taux sont recalculés. Aucun ajustement ne modifie les rapports journaliers.</div>`;
 }
 function dqeColumnOptions(selected){const rows=dqeCurrentRows(),headers=rows[DQE_IMPORT?.mapping?.headerRow||0]||[],max=Math.max(headers.length,...rows.slice(0,20).map(r=>r.length),0);return`<option value="-1">Non utilisée</option>`+Array.from({length:max},(_,i)=>`<option value="${i}" ${+selected===i?'selected':''}>${String.fromCharCode(65+i)} — ${escHtml(headers[i]||'Colonne sans titre')}</option>`).join('');}
 function renderDqeImporter(){
+  if(!canWriteFinance())return '';
   if(!DQE_IMPORT)return`<div class="attach-empty-state"><div class="attach-empty-icon">▤</div><b>Créer le premier attachement depuis le DQE</b><p>Importez le classeur contractuel. Le fichier sert à créer le cadre financier ; aucune quantité exécutée ne sera inventée.</p><div>${canAccessProjectSetup()?'<button class="bt" onclick="go(\'settings\')">Ouvrir le paramétrage</button>':''}<label class="bp dqe-file-button">Importer un DQE Excel<input type="file" accept=".xlsx,.xls" onchange="loadDqeFile(this)" hidden></label></div><small>Alternative : le référentiel pourra être saisi manuellement dans une prochaine révision.</small></div>`;
   const rows=dqeCurrentRows(),m=DQE_IMPORT.mapping,allLines=dqeMappedLines(),financial=allLines.filter(l=>!dqeIsHeadingLine(l)),headings=allLines.filter(dqeIsHeadingLine),preview=allLines.slice(0,10),total=financial.reduce((s,l)=>s+l.marketQty*l.unitPrice,0),mapField=(label,key,required=false)=>`<label><span>${label}${required?' *':''}</span><select class="fi" onchange="setDqeMapping('${key}',this.value)" ${DQE_IMPORT.sheetName==='__all_detail__'?'disabled title="Chaque feuille est reconnue automatiquement"':''}>${dqeColumnOptions(m[key])}</select></label>`;
   return`<div class="dqe-import"><div class="dqe-import-head"><div><div class="st" style="margin:0">Assistant d’import du DQE</div><span>${escHtml(DQE_IMPORT.fileName)} · lecture locale uniquement</span></div><button class="bt" onclick="cancelDqeImport()">Annuler</button></div><div class="dqe-step"><b>1. Choisir la source</b><div class="dqe-source-grid"><label><span>Feuille(s) Excel</span><select class="fi" onchange="setDqeSheet(this.value)">${dqeDetailSheetNames().length>1?`<option value="__all_detail__" ${DQE_IMPORT.sheetName==='__all_detail__'?'selected':''}>Toutes les feuilles de lots (${dqeDetailSheetNames().length})</option>`:''}${DQE_IMPORT.sheetNames.map(n=>`<option value="${escHtml(n)}" ${n===DQE_IMPORT.sheetName?'selected':''}>${escHtml(n)}</option>`).join('')}</select></label><label><span>Ligne d’en-tête ${DQE_IMPORT.sheetName==='__all_detail__'?'(détection par feuille)':''}</span><input class="fi" type="number" min="1" max="${rows.length}" value="${m.headerRow+1}" onchange="setDqeHeaderRow(this.value)" ${DQE_IMPORT.sheetName==='__all_detail__'?'disabled':''}></label><label><span>Mois du premier attachement</span><input class="fi" type="month" value="${DQE_IMPORT.periodKey}" onchange="DQE_IMPORT.periodKey=this.value"></label></div></div><div class="dqe-step"><b>2. Vérifier la correspondance des colonnes</b><div class="dqe-map-grid">${mapField('N° de prix','no')}${mapField('Désignation','designation',true)}${mapField('Unité','unit')}${mapField('Quantité marché','qty',true)}${mapField('Prix unitaire','unitPrice',true)}${mapField('Lot / section','section')}</div>${DQE_IMPORT.sheetName==='__all_detail__'?'<small>Les colonnes sont reconnues séparément dans chaque feuille afin d’éviter un décalage silencieux.</small>':''}</div><div class="dqe-step"><div class="dqe-preview-head"><b>3. Contrôler l’aperçu</b><span><b>${financial.length}</b> lignes chiffrées · <b>${headings.length}</b> titres · marché HT brut : <b>${fmt(total)} FCFA</b></span></div><div class="xls-scroll"><table class="tb dqe-preview"><thead><tr><th>N°</th><th>Désignation</th><th>Unité</th><th>Section</th><th class="nr">Quantité</th><th class="nr">PU</th><th class="nr">Montant</th></tr></thead><tbody>${preview.map(l=>dqeIsHeadingLine(l)?`<tr class="dqe-preview-heading"><td>${escHtml(l.no||'')}</td><td colspan="6">${escHtml(l.designation)}</td></tr>`:`<tr><td>${escHtml(l.no||'—')}</td><td>${escHtml(l.designation)}</td><td>${escHtml(l.unit||'—')}</td><td>${escHtml(l.section||'DQE')}</td><td class="nr">${fmt(l.marketQty)}</td><td class="nr">${fmt(l.unitPrice)}</td><td class="nr">${fmt(l.marketQty*l.unitPrice)}</td></tr>`).join('')}</tbody></table></div>${allLines.length>10?`<small>… ${allLines.length-10} autre(s) ligne(s)</small>`:''}</div><div class="dqe-confirm"><div><b>Ce qui sera verrouillé</b><span>Les titres restent de simples séparateurs. Seules les lignes chiffrées portent quantités, prix, montants et cumuls exécutés.</span></div><button class="bp" onclick="validateDqeImport()">Valider le DQE et créer N°01</button></div></div>`;
@@ -4768,12 +4770,12 @@ function genericAttachmentLineValues(period,line){
   const previous=period?.previous?ATTACH_XLS.periods[period.previous]:null,prev=previous?+(genericAttachmentLineValues(previous,line).cumulative||0):0,key=line.id,has=Object.prototype.hasOwnProperty.call(period?.values||{},key),cumulative=has?+(period.values[key]||0):prev,month=cumulative-prev,market=(+line.marketQty||0)*(+line.unitPrice||0);
   return{previous:prev,month,cumulative,market,previousAmount:prev*(+line.unitPrice||0),monthAmount:month*(+line.unitPrice||0),cumulativeAmount:cumulative*(+line.unitPrice||0),rate:market?cumulative*(+line.unitPrice||0)/market:0};
 }
-function stageGenericQty(id,value){const p=activeAttachPeriod();if(!p||p.status!=='draft')return;const n=dqeNumber(value);p.values[id]=n===null?0:n;p.manual[id]=true;saveAttachLedger();}
+function stageGenericQty(id,value){if(!canWriteFinance())return;const p=activeAttachPeriod();if(!p||p.status!=='draft')return;const n=dqeNumber(value);p.values[id]=n===null?0:n;p.manual[id]=true;saveAttachLedger();}
 function genericTotals(period){const lines=(PROJECT_CONFIG.finance?.dqe?.lines||[]).filter(l=>!dqeIsHeadingLine(l)),values=lines.map(l=>genericAttachmentLineValues(period,l)),sum=key=>values.reduce((s,v)=>s+(+v[key]||0),0);return{market:sum('market'),previous:sum('previousAmount'),month:sum('monthAmount'),cumulative:sum('cumulativeAmount')};}
 function renderGenericAttachment(period){
-  const lines=PROJECT_CONFIG.finance?.dqe?.lines||[],editable=period.status==='draft'&&ATTACH_XLS_EDIT,tot=genericTotals(period),discount=Math.max(0,Math.min(100,+PROJECT_CONFIG.finance?.discount||0))/100,retention=Math.max(0,Math.min(100,+PROJECT_CONFIG.finance?.retention||0))/100;let lastSection='';
+  const lines=PROJECT_CONFIG.finance?.dqe?.lines||[],editable=canWriteFinance()&&period.status==='draft'&&ATTACH_XLS_EDIT,tot=genericTotals(period),discount=Math.max(0,Math.min(100,+PROJECT_CONFIG.finance?.discount||0))/100,retention=Math.max(0,Math.min(100,+PROJECT_CONFIG.finance?.retention||0))/100;let lastSection='';
   let rows='';lines.forEach(line=>{if(line.section!==lastSection){lastSection=line.section;rows+=`<tr class="generic-section"><td colspan="12">${escHtml(lastSection||'DQE')}</td></tr>`;}if(dqeIsHeadingLine(line)){rows+=`<tr class="generic-heading"><td>${escHtml(line.no||'')}</td><td colspan="11">${escHtml(line.designation)}</td></tr>`;return;}const v=genericAttachmentLineValues(period,line),input=editable?`<input class="xls-adjust-input" type="number" step="0.001" value="${v.cumulative}" oninput="stageGenericQty('${line.id}',this.value)" onchange="draw()">`:xlsFmt(v.cumulative,7);rows+=`<tr><td>${escHtml(line.no||'')}</td><td>${escHtml(line.designation)}</td><td>${escHtml(line.unit||'')}</td><td class="nr">${xlsFmt(line.marketQty,2)}</td><td class="nr">${xlsFmt(line.unitPrice,3)}</td><td class="nr">${xlsFmt(v.market,4)}</td><td class="nr">${xlsFmt(v.previous,5)}</td><td class="nr xls-month">${xlsFmt(v.month,6)}</td><td class="nr ${editable?'xls-editing':''}">${input}</td><td class="nr xls-month">${xlsFmt(v.monthAmount,9)}</td><td class="nr">${xlsFmt(v.cumulativeAmount,10)}</td><td class="nr">${xlsFmt(v.rate,11)}</td></tr>`;});
-  const net=x=>x*(1-discount)*(1-retention);return`<div class="xls-lot-toolbar no-print"><div><span class="xls-locked">DQE v${PROJECT_CONFIG.finance?.dqe?.version||1} verrouillé · ${escHtml(PROJECT_CONFIG.finance?.dqe?.fileName||'référentiel importé')}</span></div><div>${editable?'<button class="bp" onclick="ATTACH_XLS_EDIT=false;draw()">✓ Enregistrer les ajustements</button>':'<button class="bp" onclick="beginContractAdjustment()">✎ Ajustement pour validation</button>'}</div></div><div class="xls-scroll"><table class="xls-sheet xls-detail generic-attachment"><thead><tr><th>N°</th><th>DÉSIGNATION</th><th>UNITÉ</th><th>QTÉ MARCHÉ</th><th>PU</th><th>MONTANT MARCHÉ</th><th>PRÉCÉDENT</th><th class="xls-month">MOIS<br><small>(calculé)</small></th><th>CUMUL${editable?'<br><small>(ajustable)</small>':''}</th><th class="xls-month">MONTANT MOIS</th><th>MONTANT CUMULÉ</th><th>%</th></tr></thead><tbody>${rows}<tr class="xls-total"><td colspan="5">TOTAL HT BRUT</td><td class="nr">${xlsFmt(tot.market,4)}</td><td class="nr">${xlsFmt(tot.previous,8)}</td><td class="nr xls-month">${xlsFmt(tot.month,9)}</td><td></td><td></td><td class="nr">${xlsFmt(tot.cumulative,10)}</td><td>${tot.market?xlsFmt(tot.cumulative/tot.market,11):'0%'}</td></tr>${discount?`<tr class="xls-total"><td colspan="10">TOTAL APRÈS REMISE ${Math.round(discount*100)} %</td><td class="nr">${xlsFmt(tot.cumulative*(1-discount),10)}</td><td></td></tr>`:''}${retention?`<tr class="xls-grand-total"><td colspan="10">TOTAL FACTURÉ APRÈS RETENUE ${Math.round(retention*100)} %</td><td class="nr">${xlsFmt(net(tot.cumulative),10)}</td><td>${tot.market?xlsFmt(net(tot.cumulative)/net(tot.market),11):'0%'}</td></tr>`:''}</tbody></table></div><div class="xls-formula-note"><b>Règle :</b> seul le cumul est ajustable. Le mois, les montants et le taux sont calculés. Ce référentiel générique ne crée aucun lien métier automatique entre lignes : ils devront être définis et validés projet par projet.</div>`;
+  const net=x=>x*(1-discount)*(1-retention);return`<div class="xls-lot-toolbar no-print"><div><span class="xls-locked">DQE v${PROJECT_CONFIG.finance?.dqe?.version||1} verrouillé · ${escHtml(PROJECT_CONFIG.finance?.dqe?.fileName||'référentiel importé')}</span></div><div>${canWriteFinance()?(editable?'<button class="bp" onclick="ATTACH_XLS_EDIT=false;draw()">✓ Enregistrer les ajustements</button>':'<button class="bp" onclick="beginContractAdjustment()">✎ Ajustement pour validation</button>'):'<span class="xls-locked">Consultation uniquement</span>'}</div></div><div class="xls-scroll"><table class="xls-sheet xls-detail generic-attachment"><thead><tr><th>N°</th><th>DÉSIGNATION</th><th>UNITÉ</th><th>QTÉ MARCHÉ</th><th>PU</th><th>MONTANT MARCHÉ</th><th>PRÉCÉDENT</th><th class="xls-month">MOIS<br><small>(calculé)</small></th><th>CUMUL${editable?'<br><small>(ajustable)</small>':''}</th><th class="xls-month">MONTANT MOIS</th><th>MONTANT CUMULÉ</th><th>%</th></tr></thead><tbody>${rows}<tr class="xls-total"><td colspan="5">TOTAL HT BRUT</td><td class="nr">${xlsFmt(tot.market,4)}</td><td class="nr">${xlsFmt(tot.previous,8)}</td><td class="nr xls-month">${xlsFmt(tot.month,9)}</td><td></td><td></td><td class="nr">${xlsFmt(tot.cumulative,10)}</td><td>${tot.market?xlsFmt(tot.cumulative/tot.market,11):'0%'}</td></tr>${discount?`<tr class="xls-total"><td colspan="10">TOTAL APRÈS REMISE ${Math.round(discount*100)} %</td><td class="nr">${xlsFmt(tot.cumulative*(1-discount),10)}</td><td></td></tr>`:''}${retention?`<tr class="xls-grand-total"><td colspan="10">TOTAL FACTURÉ APRÈS RETENUE ${Math.round(retention*100)} %</td><td class="nr">${xlsFmt(net(tot.cumulative),10)}</td><td>${tot.market?xlsFmt(net(tot.cumulative)/net(tot.market),11):'0%'}</td></tr>`:''}</tbody></table></div><div class="xls-formula-note"><b>Règle :</b> seul le cumul est ajustable. Le mois, les montants et le taux sont calculés. Ce référentiel générique ne crée aucun lien métier automatique entre lignes : ils devront être définis et validés projet par projet.</div>`;
 }
 window.stageGenericQty=stageGenericQty;
 // ── Attachement validé importé (mode b, 03/09/2026) ──
@@ -4782,7 +4784,7 @@ window.stageGenericQty=stageGenericQty;
 // sur la même base (règle du N°08). Elle publie le taux ; les montants restent à la direction.
 let ATTACH_IMPORT=null;
 function colLetter(i){let s='';i++;while(i>0){const m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26);}return s;}
-async function loadValidatedAttachmentFile(input){
+async function loadValidatedAttachmentFile(input){if(!canWriteFinance())return;
   const file=input?.files?.[0];if(!file)return;
   if(!window.XLSX){alert('Le module de lecture Excel est indisponible. Rechargez la page avec une connexion Internet.');return;}
   try{
@@ -4795,10 +4797,10 @@ async function loadValidatedAttachmentFile(input){
     draw();
   }catch(e){alert('Lecture du classeur impossible : '+(e?.message||e));}
 }
-function setAttachImportSheet(name){if(ATTACH_IMPORT&&ATTACH_IMPORT.sheets[name]){ATTACH_IMPORT.sheet=name;ATTACH_IMPORT.marketCell=null;ATTACH_IMPORT.cumulCell=null;draw();}}
-function setAttachImportTarget(t){if(ATTACH_IMPORT){ATTACH_IMPORT.target=t;draw();}}
-function setAttachImportField(k,v){if(ATTACH_IMPORT){ATTACH_IMPORT[k]=v;}}
-function pickAttachCell(r,c){
+function setAttachImportSheet(name){if(!canWriteFinance())return;if(ATTACH_IMPORT&&ATTACH_IMPORT.sheets[name]){ATTACH_IMPORT.sheet=name;ATTACH_IMPORT.marketCell=null;ATTACH_IMPORT.cumulCell=null;draw();}}
+function setAttachImportTarget(t){if(!canWriteFinance())return;if(ATTACH_IMPORT){ATTACH_IMPORT.target=t;draw();}}
+function setAttachImportField(k,v){if(!canWriteFinance())return;if(ATTACH_IMPORT){ATTACH_IMPORT[k]=v;}}
+function pickAttachCell(r,c){if(!canWriteFinance())return;
   if(!ATTACH_IMPORT)return;const rows=ATTACH_IMPORT.sheets[ATTACH_IMPORT.sheet]||[],raw=rows[r]?.[c],n=dqeNumber(raw);
   if(n===null){toast('Cette cellule ne contient pas un nombre.');return;}
   const cell={r,c,ref:colLetter(c)+(r+1),value:n};
@@ -4808,7 +4810,7 @@ function pickAttachCell(r,c){
 function cancelAttachImport(){ATTACH_IMPORT=null;draw();}
 function attachImportAmount(kind){const manual=dqeNumber(ATTACH_IMPORT?.[kind==='market'?'manualMarket':'manualCumul']);if(manual!==null)return manual;return ATTACH_IMPORT?.[kind==='market'?'marketCell':'cumulCell']?.value??null;}
 async function validateAttachImport(){
-  if(!ATTACH_IMPORT)return;if(!canAccessFinance()){toast('Réservé à la direction du projet.');return;}
+  if(!ATTACH_IMPORT)return;if(!canWriteFinance()){toast('Lecture seule : import réservé à la direction et au conducteur de travaux.');return;}
   const marche=attachImportAmount('market'),cumul=attachImportAmount('cumul'),number=Math.round(+ATTACH_IMPORT.number||0),period=String(ATTACH_IMPORT.period||'').trim();
   if(!/^\d{4}-\d{2}$/.test(period)){alert('Indiquez la période au format AAAA-MM.');return;}
   if(!(number>0)){alert('Indiquez le numéro d’attachement.');return;}
@@ -4829,9 +4831,11 @@ async function validateAttachImport(){
 }
 window.loadValidatedAttachmentFile=loadValidatedAttachmentFile;window.setAttachImportSheet=setAttachImportSheet;window.setAttachImportTarget=setAttachImportTarget;window.setAttachImportField=setAttachImportField;window.pickAttachCell=pickAttachCell;window.cancelAttachImport=cancelAttachImport;window.validateAttachImport=validateAttachImport;
 function renderAttachImportEntry(){
+  if(!canWriteFinance())return '';
   return`<div class="attach-empty-state"><div class="attach-empty-icon">▥</div><b>Importer un attachement validé</b><p>Le classeur signé ou validé (souvent celui du client) fait foi. L’application n’en retient que le montant du marché HT et le cumul attaché HT, désignés par la direction, et publie le taux financier. Les montants ne quittent pas la direction.</p><div><label class="bp dqe-file-button">Importer un attachement Excel<input type="file" accept=".xlsx,.xls" onchange="loadValidatedAttachmentFile(this)" hidden></label></div><small>Adapté aux attachements en plusieurs lots avec récapitulatif, comme aux attachements en un seul bloc.</small></div>`;
 }
 function renderAttachImporter(){
+  if(!canWriteFinance())return '';
   const I=ATTACH_IMPORT;if(!I)return renderAttachImportEntry();
   const rows=(I.sheets[I.sheet]||[]).slice(0,120),ncol=Math.min(16,rows.reduce((m,r)=>Math.max(m,r.length),0));
   const marche=attachImportAmount('market'),cumul=attachImportAmount('cumul'),taux=(marche>0&&cumul!==null)?cumul/marche*100:null;
@@ -4862,13 +4866,28 @@ function renderImportedAttachment(p,periods){
     <div class="attach-disclaimer">Situation validée et verrouillée. Le détail par lot et par ligne reste dans le classeur source ; l’application n’en publie que le taux financier aux autres rôles.</div></div>`;
 }
 let ATTACH_SHOW_BUILDER=false;
-function openAttachmentBuilder(){
+function openAttachmentBuilder(){if(!canWriteFinance())return;
   if(PROJECT_CONFIG.finance?.dqe?.lines?.length){ATTACH_SHOW_BUILDER=false;createNextContractAttachment();return;}
   ATTACH_SHOW_BUILDER=true;draw();
 }
 function closeAttachmentBuilder(){ATTACH_SHOW_BUILDER=false;DQE_IMPORT=null;draw();}
 window.openAttachmentBuilder=openAttachmentBuilder;window.closeAttachmentBuilder=closeAttachmentBuilder;
+function renderFinanceReader(){
+  const period=activeAttachPeriod(),periods=Object.values(ATTACH_XLS.periods||{}).sort((a,b)=>b.key.localeCompare(a.key));
+  if(!period)return `<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Consultation uniquement</div></div></div><div class="cd"><div class="ct">Aucun attachement enregistré</div><p>Les situations enregistrées par les responsables du chantier seront consultables ici.</p></div></div>`;
+  let h=`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Consultation uniquement · ${period.status==='validated'?'Situation validée':'Situation en préparation'}</div></div><div class="xls-app-actions no-print"><select class="fi" aria-label="Période de l’attachement" onchange="selectContractAttachment(this.value)">${periods.map(p=>`<option value="${escHtml(p.key)}" ${p.key===period.key?'selected':''}>N°${String(p.number||0).padStart(2,'0')} — ${escHtml(p.label||attachMonthLabel(p.key))} · ${p.status==='validated'?'Validé':'En préparation'}</option>`).join('')}</select>${period.imported?'':'<button class="bt" onclick="exportContractAttachmentExcel()">📊 Export Excel</button>'}<button class="bt" onclick="printContractAttachment()">🖨 Imprimer</button></div></div>`;
+  if(period.imported){
+    const a=period.amounts||{},rate=+a.marketHt>0?(+a.cumulativeHt||0)/+a.marketHt*100:null;
+    h+=`<div class="decision-grid" style="margin-top:12px"><div class="decision-card decision-card--financial"><div class="decision-kicker">Taux financier</div><div class="decision-number">${rate===null?'—':rate.toFixed(2)+' %'}</div><div class="decision-foot">Attachement N°${String(period.number||0).padStart(2,'0')} · ${escHtml(period.label||attachMonthLabel(period.key))}</div></div><div class="decision-card"><div class="decision-kicker">Marché HT</div><div class="decision-number decision-number--length">${attachMoney(+a.marketHt||0)}</div></div><div class="decision-card"><div class="decision-kicker">Cumul attaché HT</div><div class="decision-number decision-number--length">${attachMoney(+a.cumulativeHt||0)}</div></div></div><div class="cd"><div class="ct">Source de la situation</div><p>Fichier : <b>${escHtml(period.source?.fileName||'—')}</b> · Feuille : ${escHtml(period.source?.sheet||'—')}</p>${period.note?`<p>${escHtml(period.note)}</p>`:''}</div><div class="attach-disclaimer">Le classeur source fait foi pour le détail de cette situation importée.</div>`;
+  }else{
+    h+=`<div class="xls-document-head"><b>${contractAttachmentHeader(period)}</b><span>PROJET : ${escHtml(projectName().toUpperCase())}</span><span>ENTREPRISE : ${escHtml(PROJECT_CONFIG.identity?.company||'SIYO LIMITED')}</span></div>`;
+    h+=ATTACH_XLS.mode==='generic'?renderGenericAttachment(period):ATTACH_XLS_LEVEL==='lot'?renderContractLot(period,ATTACH_XLS_LOT):renderContractRecap(period);
+  }
+  return h+'</div>';
+}
 function pgAttachement(){
+  if(!canAccessFinance())return '';
+  if(!canWriteFinance())return renderFinanceReader();
   const p=activeAttachPeriod(),periods=Object.values(ATTACH_XLS.periods).sort((a,b)=>b.key.localeCompare(a.key));
   if(ATTACH_SHOW_BUILDER)return`<div class="mn xls-attachment"><div class="xls-app-head"><div><div class="st" style="margin-bottom:4px">Attachement contractuel</div><div class="attach-subtitle">Construire un attachement dans l'application à partir du DQE</div></div><div class="xls-app-actions no-print"><button class="bs" onclick="closeAttachmentBuilder()">← Retour aux situations</button></div></div><div class="attach-note" style="font-size:11px;color:#8a95a5;margin:0 0 10px">Un attachement construit ici suit ses propres lignes DQE. Il ne reprend pas automatiquement le détail d'une situation importée : un total validé ne permet pas de reconstituer les cumuls par ligne.</div>${renderDqeImporter()}</div>`;
   if(ATTACH_IMPORT)return`<div class="mn xls-attachment"><div class="st">Attachement contractuel</div>${renderAttachImporter()}</div>`;
@@ -4994,7 +5013,7 @@ window.changeReportDate=changeReportDate;window.exportReportDraft=exportReportDr
 // Pièces jointes privées — SIYO Pilot 2.9.2
 const FILE_BUCKET='report-files',FILE_LIMIT=6*1024*1024,FILES_TOTAL_LIMIT=30*1024*1024;
 const FILE_STATES=new Map(),FILE_SELECTIONS=new Map();let FILE_BUSY=false,FILE_DB_PROMISE=null;
-function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur'].includes(currentRole());}
+function canReadFiles(){return !!SESSION&&['direction','chef_projet','agent','conducteur_travaux','chef_chantier','lecteur','supervision'].includes(currentRole());}
 function fileContext(date=SD){return {pid:ACTIVE_PROJECT_ID,date,uid:SESSION?.user?.id||'',key:[SESSION?.user?.id||'',ACTIVE_PROJECT_ID,date].join('|')};}
 function fileIds(payload){return Array.isArray(payload?.file_ids)?payload.file_ids:[];}
 function fileScopeName(scope){return scope==='*'?'Ensemble du projet':LOC.find(l=>l.id===scope)?.nm||scope;}
@@ -5078,7 +5097,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.3');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.4');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
