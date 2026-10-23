@@ -46,6 +46,20 @@
 @media(max-width:600px){.file-add{grid-template-columns:1fr}.file-row{flex-direction:column;align-items:stretch}.file-actions .bs{flex:1}}
 @media print{.file-busy-overlay,.file-dialog{display:none!important}}
 </style><style id="activity-label-style">.activity-label-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.activity-label-grid label{display:grid;gap:5px;font-size:12px}.activity-label-grid .fi{width:100%;min-width:0}.activity-designations p{font-size:12px;color:#64748b;line-height:1.5}.activity-designations>.fi{max-width:100%}@media(max-width:700px){.activity-label-grid{grid-template-columns:1fr}}</style>
+<style id="staff-entry-style">
+#report-editor .staff-project-total{font-size:13px;margin:0 0 12px;color:#334155}
+#report-editor .staff-locations{display:grid;gap:12px}
+#report-editor .staff-location{border:1px solid #e2e8f0;border-radius:10px;padding:12px;min-width:0}
+#report-editor .staff-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;margin-bottom:10px}
+#report-editor .staff-heading span{font-size:12px;color:#475569}
+#report-editor .staff-row{display:grid;grid-template-columns:minmax(0,1fr) 90px 40px;gap:8px;align-items:end;margin:8px 0}
+#report-editor .staff-row label,#report-editor .staff-note{display:grid;gap:4px;min-width:0;font-size:12px;color:#475569}
+#report-editor .staff-row .fi,#report-editor .staff-note .fi{width:100%;min-width:0;min-height:44px;font-size:16px;padding:8px}
+#report-editor .staff-remove{min-height:44px;width:40px;padding:0;font-size:23px;color:#b91c1c}
+#report-editor .staff-add{margin-top:6px;min-height:44px}
+#report-editor .staff-note{margin-top:12px}
+@media(max-width:600px){#report-editor .staff-location{padding:10px}#report-editor .staff-row{grid-template-columns:minmax(0,1fr) 66px 34px;gap:6px}#report-editor .staff-remove{width:34px}}
+</style>
 </head>
 <body>
 <div id="siyo-pwa-offline" role="status" aria-live="polite" hidden>Connexion Internet interrompue. Une saisie reste sur cet appareil tant que le serveur n’a pas confirmé son enregistrement. Réessayez après le retour de la connexion.</div>
@@ -835,6 +849,16 @@ function historyDiff(before,after,includeMeta=false){
   visit(before,after,[]);return changes;
 }
 function historyFieldLabel(path){
+  if(path[0]==='eff'){
+    const locality=LOC.find(l=>l.id===path[1]);
+    const parts=['Effectifs'];if(path[1]!==undefined)parts.push(locality?.nm||path[1]);
+    if(path[2]==='postes'){
+      if(path[3]!==undefined)parts.push(/^\d+$/.test(String(path[3]))?'Poste '+(Number(path[3])+1):'Poste');
+      else parts.push('Postes');
+      for(const key of path.slice(4))parts.push(({id:'Identifiant du poste',poste:'Poste / métier',nombre:'Nombre de personnes'})[key]||key);
+    }else for(const key of path.slice(2))parts.push(({f:'Fouilleurs',s:'Poseurs / soudeurs',n:'Observation'})[key]||key);
+    return parts.join(' · ');
+  }
   const labels={entryStatus:'État de saisie par localité',loc:'Terrain',zones:'Tronçon',s:'Soudure (ml)',f:'Fouille (ml)',r:'Pose (ml)',ess:'Essais (ml)',barDay:activityName('bardage','Bardage')+' du jour (ml)',bar:activityName('bardage','Bardage')+' cumulé (ml)',topoDay:'Implantation du jour (ml)',roadAreaDay:'Ouverture de voie (m²)',imp:'Implantation cumulée',gc:'Ancien cumul GC',eff:'Effectifs',finitions:'Finitions',regards:'Regards',stage:'Étape',gcMeta:'Observation GC',rincage:'Rinçage',recolement:'Récolement',contraintes:'Contraintes',rmq:'Remarques',mobilisation:'Mobilisation',rate:'Taux (%)',correctionReason:'Motif de correction des quantités',kind:'Nature de la saisie',validation:'Métadonnées de validation',logistique:'Logistique',note:'Observation',reference:'Référence',p:'Observation terrain'};
   const l=path[0]==='loc'?LOC.find(l=>l.id===path[1]):null;
   return path.map((k,i)=>{if(l&&i===1)return l.nm;if(l&&path[i-1]==='zones')return l.zones.find(z=>z.zid===k)?.nm||k;if(l&&i===4&&path[2]==='zones')return 'DN '+k;if(path[0]==='eff'&&i===2)return {f:'Fouilleurs',s:'Soudeurs',n:'Observation'}[k]||k;return labels[k]||LOC.find(l=>l.id===k)?.nm||k;}).join(' · ');
@@ -1810,9 +1834,9 @@ function draw(){if(chartRenderTimer){clearTimeout(chartRenderTimer);chartRenderT
 
 // ── HEADER ──
 function hdr(){
-  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.2</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
+  if(!SESSION)return`<div class="hd"><div class="hi"><div class="hb"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.3</small></div><div class="hsub">Pilotage de chantiers — base centrale</div></div></div><button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button></div></div>`;
   return`<div class="hd"><div class="hi">
-    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.2</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
+    <div class="hb" onclick="go('projects')" style="cursor:pointer"><div class="hlogo">SP</div><div><div class="htit">SIYO Pilot <small style="font-size:10px;opacity:.7">2.9.3</small></div><div class="hsub">${V==='projects'?'Portefeuille de projets':escHtml(PROJECT_CONFIG.identity?.name||'Projet')}</div></div></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <button type="button" class="siyo-pwa-install" id="siyo-pwa-install" hidden onclick="window.siyoPwa?.install()">Installer SIYO Pilot</button>
       ${V==='projects'?`<div class="sync-status"><span class="sync-dot sd-green"></span>${PROJECT_REGISTRY.projects.length} projet${PROJECT_REGISTRY.projects.length>1?'s':''}</div>`:`<button class="project-switch" onclick="go('projects')">▦ Tous les projets</button><div class="sync-status"><span class="sync-dot ${online?'sd-green':'sd-red'}"></span>${online?'Base centrale · '+lastSync:'Hors ligne'} ${isConfigured()&&!syncing?'<button class="sync-btn" onclick="reload()">🔄</button>':''}</div>`}
@@ -2222,7 +2246,7 @@ function confirmReportReview(data,messages){
   lines.push(l.nm);
   if(rows.length)lines.push(...rows.map(r=>'  • '+r.type+' : '+r.detail));
   else lines.push('  '+entryEmptyText(data,l.id));
-  const eff=data.eff?.[l.id];if(eff&&(eff.f||eff.s))lines.push(`  Effectifs : ${eff.f||0} fouilleurs ; ${eff.s||0} poseurs / soudeurs`);
+  const staff=staffRows(data.eff?.[l.id]);if(staff.length)lines.push(`  Effectifs : ${staffTotal(data.eff?.[l.id])} — ${staffSummary(staffAggregate(staff))}`);
  }
  if(data.mobilisation)lines.push('Mobilisation : '+data.mobilisation.rate+' %');
  if(data.contraintes.length)lines.push('Contraintes : '+data.contraintes.map(c=>(LOC.find(l=>l.id===c.localite)?.nm||'Chantier')+' — '+c.observation+(c.action?' / Action : '+c.action:'')).join('\n'));
@@ -2304,21 +2328,19 @@ function pgSaisie(){
     <div class="saisie-section-panel" data-section-panel="resources" ${SAISIE_SECTION==='resources'?'':'hidden'}>`;
 
   h+=renderMobilisationEntry(ex);
+  h+=`<datalist id="staff-suggestions">${staffSuggestions().map(poste=>`<option value="${escHtml(poste)}"></option>`).join('')}</datalist>`;
   // Effectifs par zone/localité + Km/Carburant par zone
-  h+=`<div class="st">Effectifs, Kilométrage & Carburant</div>`;
+  h+=`<div class="st">Effectifs, Kilométrage & Carburant</div><p class="staff-project-total">Effectif total du jour — tous les fronts : <strong id="staff-project-total">${LOC.reduce((sum,l)=>sum+staffTotal(ex?.eff?.[l.id]),0)}</strong></p>`;
   ZN.forEach(zone=>{
     const locs=LOC.filter(l=>l.z===zone);
     const exZ=ex?.logistique?.[zone]||{};
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Zone ${escHtml(zone)}</div>
-      <table class="tb"><thead><tr><th>Localité</th><th class="nr">Fouilleurs</th><th class="nr">${materialTracking()?'Poseurs / soudeurs':'Soudeurs'}</th><th>Note</th></tr></thead><tbody>`;
+      <div class="staff-locations">`;
     locs.forEach(l=>{
       const eL=ex?.eff?.[l.id]||{};
-      h+=`<tr><td>${escHtml(l.nm)}</td>
-        <td><input type="number" class="ci" id="ef_${l.id}" value="${eL.f||''}" min="0" placeholder="0"></td>
-        <td><input type="number" class="ci" id="es_${l.id}" value="${eL.s||''}" min="0" placeholder="0"></td>
-        <td><input type="text" class="ci ti" id="en_${l.id}" value="${escHtml(eL.n||'')}" placeholder=""></td></tr>`;
+      h+=renderStaffEditor(l,eL);
     });
-    h+=`</tbody></table>
+    h+=`</div>
       <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eef1f6">
       <div class="g3">
         <div class="fr"><label class="fl">Km matin</label><input type="number" class="fi" id="lg_km1_${zone}" value="${exZ.km_matin||''}" placeholder="0"></div>
@@ -2352,6 +2374,78 @@ function setReportKind(kind){
   });
 }
 
+// Effectifs journaliers : une seule liste par localité ; lecture compatible f/s.
+function staffKey(value){return String(value??'').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase('fr-FR');}
+function staffRows(entry,{includeZero=false}={}){
+  const e=entry||{};
+  const rows=Array.isArray(e.postes)?e.postes:[
+    {id:'legacy-f',poste:'Fouilleurs',nombre:Number(e.f)||0},
+    {id:'legacy-s',poste:materialTracking()?'Poseurs / soudeurs':'Soudeurs',nombre:Number(e.s)||0}
+  ];
+  return rows.filter(row=>row&&typeof row==='object').map((row,i)=>({id:String(row.id||'row-'+i),poste:String(row.poste??'').trim(),nombre:row.nombre})).filter(row=>includeZero||Number.isSafeInteger(row.nombre)&&row.nombre>0);
+}
+function staffAggregate(rows){
+  const groups=new Map();
+  for(const row of rows){const key=staffKey(row.poste);if(!key||!Number.isSafeInteger(row.nombre)||row.nombre<=0)continue;const old=groups.get(key);if(old)old.nombre+=row.nombre;else groups.set(key,{id:row.id,poste:row.poste,nombre:row.nombre});}
+  return [...groups.values()];
+}
+function staffTotal(entry){return staffRows(entry).reduce((sum,row)=>sum+row.nombre,0);}
+function staffSummary(rows){return staffAggregate(rows).map(row=>row.nombre+' '+row.poste).join(' · ');}
+function staffEntryError(entry){
+  if(!Array.isArray(entry?.postes))return '';
+  const seen=new Set(),ids=new Set();let total=0;
+  for(const row of entry.postes){
+    if(!row||typeof row.poste!=='string'||!row.poste.trim())return 'Renseignez le poste correspondant au nombre de personnes.';
+    if(row.poste.length>80)return 'Le nom du poste doit contenir au maximum 80 caractères.';
+    if(row.nombre===null||row.nombre===''||row.nombre===undefined)return 'Renseignez le nombre de personnes pour « '+row.poste+' ».';
+    if(!Number.isSafeInteger(row.nombre)||row.nombre<0)return 'Les effectifs doivent être des nombres entiers positifs ou nuls.';
+    const key=staffKey(row.poste);if(seen.has(key))return 'Le poste « '+row.poste+' » apparaît deux fois dans la même localité. Regroupez les effectifs sur une seule ligne.';seen.add(key);
+    if(!row.id||ids.has(row.id))return 'Deux lignes de personnel ont le même identifiant. Rechargez la saisie.';ids.add(row.id);
+    total+=row.nombre;if(!Number.isSafeInteger(total))return 'Le total des effectifs est trop élevé.';
+  }
+  return '';
+}
+function staffRowId(){return 'p-'+(globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));}
+function staffSafeId(value){return /^[a-zA-Z0-9_-]{1,80}$/.test(String(value||''))?String(value):staffRowId();}
+function staffSuggestions(){
+  const names=new Map();
+  for(const date of Object.keys(db).sort().reverse())for(const entry of Object.values(db[date]?.eff||{}))for(const row of staffRows(entry,{includeZero:true})){if(row.poste&&!names.has(staffKey(row.poste)))names.set(staffKey(row.poste),row.poste);}
+  for(const poste of ['Fouilleurs','Poseurs','Soudeurs','Machinistes','Chauffeurs','Maçons','Manœuvres'])if(!names.has(staffKey(poste)))names.set(staffKey(poste),poste);
+  return [...names.values()];
+}
+function staffRowHtml(index,row={}){
+  const id=staffSafeId(row.id),prefix='staff_'+index+'_'+id,loc=LOC[index];
+  return `<div class="staff-row" data-staff-id="${id}"><label>Poste / métier<input class="fi staff-poste" id="${prefix}_poste" type="text" value="${escHtml(row.poste||'')}" maxlength="80" list="staff-suggestions" placeholder="Ex. Machinistes" aria-label="${escHtml(loc?.nm||'')} · Poste ou métier"></label><label>Nombre<input class="fi staff-nombre" id="${prefix}_nombre" type="number" inputmode="numeric" step="1" min="0" value="${escHtml(String(row.nombre??''))}" placeholder="0" aria-label="${escHtml(loc?.nm||'')} · Nombre de personnes"></label><button class="bs staff-remove" type="button" onclick="removeStaffRow(this)" aria-label="Supprimer cette ligne de personnel">×</button></div>`;
+}
+function renderStaffEditor(loc,entry){
+  const index=LOC.indexOf(loc),rows=staffRows(entry,{includeZero:true}).filter(row=>row.poste&&(row.nombre>0||Array.isArray(entry.postes)));
+  return `<section class="staff-location" data-entry-front="${escHtml(loc.id)}" data-staff-front="${escHtml(loc.id)}"><div class="staff-heading"><b>${escHtml(loc.nm)}</b><span>Total : <strong data-staff-total>${staffTotal(entry)}</strong></span></div><div class="staff-rows">${(rows.length?rows:[{id:'blank'}]).map(row=>staffRowHtml(index,row)).join('')}</div><button class="bs staff-add" type="button" onclick="addStaffRow(${index})">＋ Ajouter un poste</button><label class="staff-note">Observation sur le personnel<input type="text" class="fi" id="en_${loc.id}" value="${escHtml(entry.n||'')}" maxlength="300" placeholder="Facultatif"></label></section>`;
+}
+function staffHosts(){return [...document.querySelectorAll('#report-editor [data-staff-front]')];}
+function collectStaffEntry(locId){
+  const host=staffHosts().find(el=>el.dataset.staffFront===locId),postes=[];
+  host?.querySelectorAll('.staff-row').forEach(row=>{const poste=cleanText(row.querySelector('.staff-poste')?.value||'',80),raw=row.querySelector('.staff-nombre')?.value??'';if(!poste&&raw==='')return;postes.push({id:row.dataset.staffId,poste,nombre:raw===''?null:Number(raw)});});
+  return {postes,n:cleanText(document.getElementById('en_'+locId)?.value||'',300)};
+}
+function staffFormStructure(){return staffHosts().map(host=>({front:host.dataset.staffFront,ids:[...host.querySelectorAll('.staff-row')].map(row=>row.dataset.staffId),rows:[...host.querySelectorAll('.staff-row')].map(row=>({id:row.dataset.staffId,poste:row.querySelector('.staff-poste')?.value||'',nombre:row.querySelector('.staff-nombre')?.value??''}))}));}
+function refreshStaffTotals(){let total=0;for(const host of staffHosts()){const count=staffTotal(collectStaffEntry(host.dataset.staffFront)),output=host.querySelector('[data-staff-total]');if(output)output.textContent=String(count);total+=count;}const project=document.getElementById('staff-project-total');if(project)project.textContent=String(total);}
+function addStaffRow(index){
+  if(syncing||FILE_BUSY||!LOC[index])return;const host=staffHosts().find(el=>el.dataset.staffFront===LOC[index].id),rows=host?.querySelector('.staff-rows');if(!rows)return;
+  rows.insertAdjacentHTML('beforeend',staffRowHtml(index,{id:staffRowId()}));captureReportDraft();rows.lastElementChild?.querySelector('input')?.focus();
+}
+function removeStaffRow(button){if(syncing||FILE_BUSY)return;const row=button.closest('.staff-row');if(!row)return;const host=row.closest('[data-staff-front]');row.remove();refreshStaffTotals();captureReportDraft();host?.querySelector('.staff-add')?.focus();}
+function restoreStaffDraft(draft){
+  for(const host of staffHosts()){
+    const front=host.dataset.staffFront,index=LOC.findIndex(l=>l.id===front),saved=draft.staffStructure?.find(item=>item.front===front);
+    if(saved&&Array.isArray(saved.rows)){host.querySelector('.staff-rows').innerHTML=saved.rows.map(row=>staffRowHtml(index,{id:staffSafeId(row.id),poste:row.poste,nombre:row.nombre})).join('');}
+    else if(saved&&Array.isArray(saved.ids)){host.querySelector('.staff-rows').innerHTML=saved.ids.map(id=>staffRowHtml(index,{id:staffSafeId(id)})).join('');}
+    else if(Object.hasOwn(draft.fields,'ef_'+front)||Object.hasOwn(draft.fields,'es_'+front)){
+      host.querySelector('.staff-rows').innerHTML=[{id:'legacy-f',poste:'Fouilleurs',nombre:Number(draft.fields['ef_'+front])||0},{id:'legacy-s',poste:materialTracking()?'Poseurs / soudeurs':'Soudeurs',nombre:Number(draft.fields['es_'+front])||0}].map(row=>staffRowHtml(index,row)).join('');
+    }
+  }
+}
+function reportFormSignature(fields=reportFields()){return JSON.stringify({fields,indexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index),staffStructure:staffFormStructure()});}
+
 function collect(){const d={loc:{},eff:{},logistique:{},finitions:{regards:{},gcMeta:{},rincage:{},recolement:{}},contraintes:[],rmq:'',dt:SD,kind:document.getElementById('report_kind')?.value||'production',correctionReason:document.getElementById('correction_reason')?.value||''};
   LOC.forEach(l=>{
     const previous=db[SD]?.loc?.[l.id]||{};
@@ -2381,7 +2475,7 @@ function collect(){const d={loc:{},eff:{},logistique:{},finitions:{regards:{},gc
     if(previous.imp!==undefined&&previous.topoDay===undefined&&topoRaw==='')d.loc[l.id].imp=previous.imp;
     if(previous.gc!==undefined)d.loc[l.id].gc=previous.gc;
     if(previous.rec!==undefined)d.loc[l.id].rec=previous.rec;
-    d.eff[l.id]={f:+(document.getElementById('ef_'+l.id)?.value)||0,s:+(document.getElementById('es_'+l.id)?.value)||0,n:cleanText(document.getElementById('en_'+l.id)?.value||'',300)};
+    d.eff[l.id]=collectStaffEntry(l.id);
   });
   ZN.forEach(zone=>{d.logistique[zone]={km_matin:+(document.getElementById('lg_km1_'+zone)?.value)||0,km_soir:+(document.getElementById('lg_km2_'+zone)?.value)||0,carburant:+(document.getElementById('lg_carb_'+zone)?.value)||0,remarques:cleanText(document.getElementById('lg_rmq_'+zone)?.value||'',500)};});
   LOC.forEach(l=>{
@@ -2724,21 +2818,22 @@ function pgDailyRapport(){const dates=ensureExistingReportDate(),rp=db[SD];let c
     const psZ=pc(zS,zP),pfZ=pc(zF,zP),prZ=pc(zR,zP),peZ=pc(zE,zP);
     h+=`<tr style="font-weight:700;border-top:3px solid #dce1e9;background:#f0f4f8"><td>Total Zone ${zone}</td><td></td><td class="nr">${fmt(zP)}</td><td class="nr">${fmt(zS)}</td><td><span class="kb ${bC(psZ)}">${psZ.toFixed(1)}%</span></td><td class="nr">${fmt(zF)}</td><td><span class="kb ${bC(pfZ)}">${pfZ.toFixed(1)}%</span></td><td class="nr">${fmt(zR)}</td><td><span class="kb ${bC(prZ)}">${prZ.toFixed(1)}%</span></td><td class="nr">${fmt(zE)}</td><td><span class="kb ${bC(peZ)}">${peZ.toFixed(1)}%</span></td></tr></tbody></table></div></div>`;});
 
-  // Logistique par zone avec effectifs par localité
-  const hasLogistique=ZN.some(zone=>{const lg=rp.logistique?.[zone]||{};return (+lg.km_matin||0)+(+lg.km_soir||0)+(+lg.carburant||0)>0||(lg.remarques&&lg.remarques!=='RAS')||LOC.filter(l=>l.z===zone).some(l=>{const e=rp.eff?.[l.id]||{};return (+e.f||0)+(+e.s||0)>0;});});
+  // Effectifs journaliers libres, regroupés par localité et zone.
+  const hasLogistique=ZN.some(zone=>{const lg=rp.logistique?.[zone]||{};return (+lg.km_matin||0)+(+lg.km_soir||0)+(+lg.carburant||0)>0||(lg.remarques&&lg.remarques!=='RAS')||LOC.filter(l=>l.z===zone).some(l=>staffTotal(rp.eff?.[l.id])>0||rp.eff?.[l.id]?.n);});
   if(hasLogistique){h+=`<div class="st">Ressources et logistique</div>`;
   ZN.forEach(zone=>{const locs=LOC.filter(l=>l.z===zone);const lg=rp.logistique?.[zone]||{};const km=(lg.km_soir||0)-(lg.km_matin||0);
-    // Effectifs par localité
-    let tFl=0,tSd=0;
-    locs.forEach(l=>{const e=rp.eff?.[l.id]||{};tFl+=(+e.f||0);tSd+=(+e.s||0);});
-    if(!tFl&&!tSd&&!km&&!lg.carburant&&(!lg.remarques||lg.remarques==='RAS'))return;
+    const totalStaff=locs.reduce((sum,l)=>sum+staffTotal(rp.eff?.[l.id]),0);
+    const staffNotes=locs.some(l=>rp.eff?.[l.id]?.n);
+    if(!totalStaff&&!staffNotes&&!km&&!lg.carburant&&(!lg.remarques||lg.remarques==='RAS'))return;
     h+=`<div class="cd"><div class="ct"><span class="dt" style="background:${zone==='Ouest'?'#2c7be5':'#00b8d9'}"></span> Zone ${escHtml(zone)}</div>`;
-    // Effectifs table
-    if(tFl+tSd>0){
-      h+=`<table class="tb" style="margin-bottom:12px"><thead><tr><th>Localité</th><th class="nr">Fouilleurs</th><th class="nr">${materialTracking()?'Poseurs / soudeurs':'Soudeurs'}</th><th>Note</th></tr></thead><tbody>`;
-      locs.forEach(l=>{const e=rp.eff?.[l.id]||{};if(!(+e.f||0)&&!(+e.s||0))return;
-        h+=`<tr><td>${escHtml(l.nm)}</td><td class="nr">${e.f||0}</td><td class="nr">${e.s||0}</td><td style="font-size:11px;color:#8a95a5">${escHtml(e.n||'')}</td></tr>`;});
-      h+=`<tr style="font-weight:700;border-top:2px solid #dce1e9"><td>Total</td><td class="nr">${tFl}</td><td class="nr">${tSd}</td><td></td></tr></tbody></table>`;}
+    if(totalStaff>0||staffNotes){
+      h+=`<table class="tb" style="margin-bottom:12px"><thead><tr><th>Localité</th><th>Poste / métier</th><th class="nr">Nombre de personnes</th></tr></thead><tbody>`;
+      locs.forEach(l=>{const e=rp.eff?.[l.id]||{},rows=staffRows(e);
+        rows.forEach(row=>{h+=`<tr><td>${escHtml(l.nm)}</td><td>${escHtml(row.poste)}</td><td class="nr">${row.nombre}</td></tr>`;});
+        if(e.n)h+=`<tr><td>${escHtml(l.nm)}</td><td colspan="2" style="font-size:11px;color:#8a95a5">${escHtml(e.n)}</td></tr>`;
+      });
+      h+=`<tr style="font-weight:700;border-top:2px solid #dce1e9"><td colspan="2">Total zone ${escHtml(zone)}</td><td class="nr">${totalStaff}</td></tr></tbody></table>`;
+    }
     // Km & Carburant
     h+=`<div class="kr">`;
     if(km)h+=`<div class="kc"><div class="kl">Km</div><div class="kv">${fmt(km)}</div><div class="ksb">${fmt(lg.km_matin||0)} → ${fmt(lg.km_soir||0)}</div></div>`;
@@ -2854,20 +2949,19 @@ function whatsappText(date,rp,cu,zone=null){
   txt+=`*Situation cumulée au ${fD(date)}*\n`;
   txt+=whatsappCumulativeLines(s,cu).join('\n')+'\n';
 
-  // Conserver les catégories de ressources existantes, regroupées par zone.
-  // Ni nouvelle catégorie d'effectif ni mobilisation ajoutée dans WhatsApp.
+  // Tous les postes déclarés ce jour ; aucun cumul de personnes entre dates.
   const resourceBlocks=[];
   for(const z of zones){
-    const lg=rp.logistique?.[z]||{},km=(lg.km_soir||0)-(lg.km_matin||0),staffLines=[];
-    let fl=0,sd=0;
+    const lg=rp.logistique?.[z]||{},km=(lg.km_soir||0)-(lg.km_matin||0),staffLines=[],zoneStaff=[];
     for(const l of LOC.filter(l=>l.z===z)){
-      const e=rp.eff?.[l.id]||{},f=+e.f||0,p=+e.s||0;fl+=f;sd+=p;
-      if(WA_MODE==='detail'&&(f||p))staffLines.push(`  👷 ${l.nm}: ${f} fouilleurs, ${p} ${materialTracking()?'poseurs / soudeurs':'soudeurs'}${e.n?' ('+e.n+')':''}`);
+      const e=rp.eff?.[l.id]||{},rows=staffRows(e);zoneStaff.push(...rows);
+      if(WA_MODE==='detail'&&(rows.length||e.n))staffLines.push(`  👷 ${l.nm}: ${staffSummary(staffAggregate(rows))}${e.n?(rows.length?' ('+e.n+')':e.n):''}`);
     }
-    if(!(fl+sd||km||lg.carburant||(lg.remarques&&lg.remarques!=='RAS')))continue;
+    const totalStaff=zoneStaff.reduce((sum,row)=>sum+row.nombre,0);
+    if(!(totalStaff||staffLines.length||km||lg.carburant||(lg.remarques&&lg.remarques!=='RAS')))continue;
     let block=`*Zone ${z}*\n`;
     if(staffLines.length)block+=staffLines.join('\n')+'\n';
-    if(fl+sd)block+=`  ▸ Effectif déclaré: *${fl+sd}* (${fl} fouilleurs · ${sd} ${materialTracking()?'poseurs / soudeurs':'soudeurs'})\n`;
+    if(totalStaff)block+=`  ▸ Effectif déclaré: *${totalStaff}* (${staffSummary(staffAggregate(zoneStaff))})\n`;
     if(km)block+=`  ▸ Kilométrage: ${fmt(km)} km\n`;
     if(lg.carburant)block+=`  ▸ Carburant: ${lg.carburant} L\n`;
     if(lg.remarques&&lg.remarques!=='RAS')block+=`  ▸ ${lg.remarques}\n`;
@@ -4200,7 +4294,7 @@ function exportComplet(){
       moe:PROJECT_CONFIG.identity?.owner||'',
       genere_le:new Date().toISOString(),
       genere_par:`Avancement ${projectShortName()} (web app)`,
-      version_app:'2.9.2 — saisie optimisée pour téléphone, 04/10/2026' ,
+      version_app:'2.9.3 — effectifs par métier, 22/10/2026' ,
       nb_rapports:ds.length,
       premiere_date:ds[0]||null,
       derniere_date:ds[ds.length-1]||null,
@@ -4823,8 +4917,9 @@ function reportFields(){
 }
 function captureReportDraft(){
   if(V!=='saisie'||!document.getElementById('report-editor')||REPORT_FORM_DATE!==SD)return;
-  const fields=reportFields();const signature=JSON.stringify({fields,indexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index)});if(signature===REPORT_FORM_BASELINE)return;
-  const old=readReportDraft(),draft={...old,date:SD,baseVersion:old?old.baseVersion:REPORT_FORM_VERSION,saveStatus:old?.saveStatus==='sending'?'sending':'unsent',saveMessage:'',saveCode:'',fields,constraintIndexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index),updatedAt:new Date().toISOString()};
+  refreshStaffTotals();
+  const fields=reportFields();const signature=reportFormSignature(fields);if(signature===REPORT_FORM_BASELINE)return;
+  const old=readReportDraft(),draft={...old,date:SD,baseVersion:old?old.baseVersion:REPORT_FORM_VERSION,saveStatus:old?.saveStatus==='sending'?'sending':'unsent',saveMessage:'',saveCode:'',fields,constraintIndexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index),staffStructure:staffFormStructure(),updatedAt:new Date().toISOString()};
   REPORT_DRAFT_MEMORY.set(reportDraftKey(),draft);
   try{localStorage.setItem(reportDraftKey(),JSON.stringify(draft));}catch(e){toast('Stockage local indisponible : gardez cette page ouverte et exportez votre copie locale.');}
   REPORT_FORM_BASELINE=signature;
@@ -4834,10 +4929,12 @@ function restoreReportDraft(){
   const draft=readReportDraft();
   if(draft){
     const host=document.getElementById('contrainte_rows');if(host&&draft.constraintIndexes)host.innerHTML=draft.constraintIndexes.map(i=>contrainteRowHtml(i)).join('');
-    Object.entries(draft.fields).forEach(([id,value])=>{const el=document.getElementById(id);if(el&&el.type!=='file'&&!id.startsWith('file_new_'))el.value=value;});
+    restoreStaffDraft(draft);
+    Object.entries(draft.fields).forEach(([id,value])=>{if(id.startsWith('staff_')&&draft.staffStructure?.some(item=>Array.isArray(item.rows)))return;const el=document.getElementById(id);if(el&&el.type!=='file'&&!id.startsWith('file_new_'))el.value=value;});
     setReportKind(draft.fields.report_kind||'production');
   }
-  REPORT_FORM_DATE=SD;REPORT_FORM_VERSION=draft?draft.baseVersion:(DB_VERSIONS[SD]||0);REPORT_FORM_BASELINE=JSON.stringify({fields:reportFields(),indexes:[...document.querySelectorAll('.contrainte-row')].map(el=>+el.dataset.index)});
+  refreshStaffTotals();
+  REPORT_FORM_DATE=SD;REPORT_FORM_VERSION=draft?draft.baseVersion:(DB_VERSIONS[SD]||0);REPORT_FORM_BASELINE=reportFormSignature();
 }
 function clearReportDraft(date=SD){REPORT_DRAFT_MEMORY.delete(reportDraftKey(date));try{localStorage.removeItem(reportDraftKey(date));}catch(e){}}
 function reportDraftNotice(){return '<div id="report-save-feedback">'+reportSaveNoticeHTML()+'</div>';}
@@ -4862,7 +4959,8 @@ function reportValueError(data){
   for(const l of LOC){
     const area=data.loc?.[l.id]?.roadAreaDay;
     if(area!==undefined&&(typeof area!=='number'||!Number.isFinite(area)))return 'Ouverture de voie : saisissez une surface valide en m².';
-    const e=data.eff?.[l.id]||{};if(['f','s'].some(k=>!Number.isFinite(e[k])||e[k]<0||!Number.isInteger(e[k])))return 'Les effectifs doivent être des nombres entiers positifs ou nuls.';
+    const e=data.eff?.[l.id]||{},staffError=staffEntryError(e);if(staffError)return l.nm+' : '+staffError;
+    if(!Array.isArray(e.postes)&&['f','s'].some(k=>e[k]!==undefined&&(!Number.isFinite(e[k])||e[k]<0||!Number.isInteger(e[k]))))return 'Les effectifs doivent être des nombres entiers positifs ou nuls.';
   }
   for(const log of Object.values(data.logistique||{})){
     if(['km_matin','km_soir','carburant'].some(k=>!Number.isFinite(log[k])||log[k]<0))return 'Kilométrages et carburant : valeurs positives ou nulles requises.';
@@ -4980,7 +5078,7 @@ async function buildReportPdf(baseBytes,files,context){
  else{const img=await result.embedJpg(await photoForPdf(f.bytes,f.mime_type)),fit=img.scaleToFit(w-84,Math.max(50,y-55));page.drawImage(img,{x:(w-fit.width)/2,y:55+(y-55-fit.height)/2,width:fit.width,height:fit.height});}
  page.drawText(`SIYO Pilot · Annexe ${annex}`,{x:42,y:25,size:9,font});
  }
- result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.2');return result.save();
+ result.setTitle(`${context.project} — Rapport du ${context.date}`);result.setCreator('SIYO Pilot 2.9.3');return result.save();
 }
 async function exportRapportWithFiles(){
  if(V!=='rapport'||!db[SD]||FILE_BUSY||syncing)return;const ctx=fileContext(),date=fD(SD),project=projectName(),ids=canReadFiles()?fileIds(db[SD]).filter(fileSelected):[],selectedContext={project,date};let host;
